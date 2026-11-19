@@ -249,7 +249,7 @@
     s.layers = all;
     if (window.KartaPC && window.KartaCoverage) {
       s.sources.coverage = {type:'geojson',data:{type:'Feature',properties:{},geometry:KartaCoverage.mask},tolerance:0};
-      s.layers.push({id:'coverage-mask',type:'fill',source:'coverage',paint:{'fill-color':theme === 'dark' ? '#171a1f' : '#e9e5dc','fill-antialias':false}});
+      s.layers.push({id:'coverage-mask',type:'fill',source:'coverage',paint:{'fill-color':theme === 'dark' ? '#171a1f' : '#e4e2dd','fill-antialias':false}});
     }
     return s;
   }
@@ -393,7 +393,7 @@
     glMap: function () { return gl; },
     reload: loadVec,
     note: function () {},                       // app.js подставляет всплывающее сообщение
-    credits: window.KartaPC ? 'Схема: © участники OpenStreetMap, ODbL; сборка Protomaps. Границы покрытия: geoBoundaries / OpenStreetMap / Wambacher, ODbL 1.0 (2017). Номера зданий показаны при наличии в исходных данных.' : 'Карты: © участники OpenStreetMap (офлайн-схема — сборка Protomaps); снимки © Esri; загруженные снимки районов — Sentinel-2 cloudless, https://s2maps.eu, EOX IT Services GmbH (содержит изменённые данные Copernicus Sentinel 2016–2017); подписи на снимках © Яндекс.',
+    credits: window.KartaPC ? 'Схема: © участники OpenStreetMap, ODbL (выгрузка 18.11.2026); контуры домов, которых нет в OpenStreetMap, — Microsoft Global ML Building Footprints, ODbL; плитки — схема Protomaps (Planetiler). Границы областей — OpenStreetMap. Номера домов показаны там, где они есть в OpenStreetMap.' : 'Карты: © участники OpenStreetMap (офлайн-схема — сборка Protomaps); снимки © Esri; загруженные снимки районов — Sentinel-2 cloudless, https://s2maps.eu, EOX IT Services GmbH (содержит изменённые данные Copernicus Sentinel 2016–2017); подписи на снимках © Яндекс.',
     setSchema: function (v) { schema = !offlineOnly && v === 'online' ? 'online' : 'auto'; sync(); },
     // тема сменилась — офлайн-карта перерисовывается в светлых или тёмных цветах
     retheme: restyle

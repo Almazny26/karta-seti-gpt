@@ -176,6 +176,110 @@ def desktop_style(base, dark=False):
                   'poi-primary-label','road_label','subplace','locality','address-close']
     symbols={layer['id']:layer for layer in layers if layer['type']=='symbol'}
     s['layers']=[layer for layer in layers if layer['type']!='symbol']+[symbols[id] for id in symbol_order]
+    return yandex_like(s,dark)
+
+# Светлая схема ПК в духе «Яндекс Карт»: светлый тёплый фон, белые улицы, жёлтые и оранжевые
+# магистрали, светло-серые дома, зелёные парки, голубая вода. Только локальные шрифты Noto Sans.
+YA={'light':dict(bg='#f3f1ec',earth='#f3f1ec',urban='#e9e6df',park='#d3ebc5',wood='#c4e2b0',farm='#f0efe4',
+                 ind='#e9e6e3',water='#a9d3f5',water_l='#3d79b5',building='#dfdad2',building_l='#c9c2b7',
+                 minor='#ffffff',minor_c='#dcd7ce',service='#ffffff',major='#fff6d1',major_c='#e3cf8f',
+                 primary='#ffe28a',primary_c='#e6b85a',hw='#ffc55c',hw_c='#e09a2c',path='#c9b9a6',rail='#a9a6a1',
+                 boundary='#b98bc0',label='#333333',label_h='#ffffff',road_l='#4a4a4a',place='#1f1f1f',
+                 village='#3a3a3a',sub='#7a7a7a',addr='#6e675e',school='#f6ecd2',hospital='#f8e1e1',
+                 sport='#cfe8c0',cemetery='#dbe6d0',sand='#f6ecc8',wetland='#d3e6dc',pedestrian='#efede8',
+                 retail='#f3e6e1'),
+    'dark':dict(bg='#1d2026',earth='#1d2026',urban='#24282e',park='#1f2c24',wood='#203024',farm='#20231f',
+                ind='#25222a',water='#16324a',water_l='#7aa6c7',building='#3a3e46',building_l='#4a4f58',
+                minor='#3a3f48',minor_c='#2a2e35',service='#33383f',major='#4b4f58',major_c='#2f3238',
+                primary='#6b5f3e',primary_c='#3d3828',hw='#8a6a35',hw_c='#4e3f22',path='#5a5650',rail='#5d6168',
+                boundary='#8d72a0',label='#d6d9de',label_h='#14171b',road_l='#c2c6cc',place='#eceef1',
+                village='#d8dbe0',sub='#9aa0a8',addr='#c9c2b2',school='#36372d',hospital='#422e38',
+                sport='#253b2e',cemetery='#2c3b30',sand='#443c29',wetland='#253835',pedestrian='#2a2d33',
+                retail='#382f2e')}
+def yandex_like(s,dark):
+    y=YA['dark' if dark else 'light']
+    layers=s['layers'];by={l['id']:l for l in layers}
+    def width(*p): return zi(*p)
+    by['earth']['paint']['fill-color']=y['earth']
+    layers.insert(0,{'id':'background','type':'background','paint':{'background-color':y['bg']}})
+    by['landcover']['paint']['fill-color']=['match',['get','kind'],'forest',y['wood'],'farmland',y['farm'],
+        'urban_area',y['urban'],['grassland','scrub'],y['park'],'barren',y['sand'],y['park']]
+    by['landuse']['paint']['fill-color']=['match',['get','kind'],
+        ['park','national_park','nature_reserve','protected_area','garden','recreation_ground','playground','village_green','grass','grassland'],y['park'],
+        ['forest','wood','scrub','orchard','vineyard'],y['wood'],
+        ['farmland','farm','farmyard','meadow','allotments'],y['farm'],
+        ['school','kindergarten','college','university'],y['school'],
+        ['hospital','clinic'],y['hospital'],
+        ['pitch','stadium','golf_course','sports_centre'],y['sport'],
+        ['industrial','railway','military','aerodrome','airfield','quarry','naval_base','landfill'],y['ind'],
+        ['commercial','retail','supermarket','grocery'],y['retail'],
+        ['residential','neighbourhood'],y['urban'],
+        ['pedestrian','footway','platform','pier'],y['pedestrian'],
+        ['cemetery','grave_yard'],y['cemetery'],
+        ['beach','sand'],y['sand'],
+        ['wetland'],y['wetland'],
+        'rgba(0,0,0,0)']
+    by['landuse']['paint']['fill-opacity']=['interpolate',['linear'],['zoom'],7,0,9,1]
+    by['water']['paint']['fill-color']=y['water']
+    by['water_lines']['paint']['line-color']=y['water']
+    by['water_lines']['minzoom']=9
+    by['water_lines']['paint']['line-width']=width(9,['match',['get','kind'],['river','canal'],0.8,0.3],14,['match',['get','kind'],['river','canal'],3,1.2],18,['match',['get','kind'],['river','canal'],14,4])
+    b=by['buildings']
+    b['minzoom']=11
+    b['paint']={'fill-color':y['building'],'fill-outline-color':y['building_l'],
+                'fill-opacity':['interpolate',['linear'],['zoom'],11,.5,13,1]}
+    # дома крупно: тонкий контур по краю, как у Яндекса
+    outline={'id':'buildings-outline','type':'line','source':'p','source-layer':'buildings','minzoom':15,
+             'filter':['in','kind','building','building_part'],
+             'paint':{'line-color':y['building_l'],'line-width':['interpolate',['linear'],['zoom'],15,.4,18,1.2]}}
+    layers.insert(layers.index(b)+1,outline)
+    # дороги
+    by['path']['paint']['line-color']=y['path']
+    by['rail']['paint']['line-color']=y['rail']
+    by['minor_casing']['paint']['line-color']=y['minor_c']
+    by['minor']['paint']['line-color']=['case',['==',['get','kind_detail'],'service'],y['service'],y['minor']]
+    prim=['in',['get','kind_detail'],['literal',['primary','primary_link','trunk','trunk_link']]]
+    by['major_casing']['paint']['line-color']=['case',prim,y['primary_c'],y['major_c']]
+    by['major']['paint']['line-color']=['case',prim,y['primary'],y['major']]
+    by['major_casing']['paint']['line-width']=width(8,['case',prim,1.4,0.9],12,['case',prim,4,3],15,['case',prim,8,6.5],18,['case',prim,24,19])
+    by['major']['paint']['line-width']=width(6,['case',prim,0.8,0.4],12,['case',prim,2.6,1.8],15,['case',prim,6.2,4.8],18,['case',prim,21,16])
+    by['hw_casing']['paint']['line-color']=y['hw_c']
+    by['hw']['paint']['line-color']=y['hw']
+    # границы областей и районов — пунктир
+    bnd={'id':'boundaries','type':'line','source':'p','source-layer':'boundaries','minzoom':5,
+         'filter':['<=',['get','kind_detail'],6],
+         'paint':{'line-color':y['boundary'],'line-opacity':.7,'line-dasharray':[3,2],
+                  'line-width':['interpolate',['linear'],['zoom'],5,['case',['<=',['get','kind_detail'],4],1,.5],12,['case',['<=',['get','kind_detail'],4],2.2,1]]}}
+    first_road=next(i for i,l in enumerate(layers) if l['id']=='rail')
+    layers.insert(first_road,bnd)
+    # подписи
+    for l in layers:
+        if l['type']=='symbol' and 'text-halo-color' in l.get('paint',{}):
+            l['paint']['text-halo-color']=y['label_h']
+    by['road_label']['paint'].update({'text-color':y['road_l'],'text-halo-width':1.6})
+    by['water_label']['paint']['text-color']=y['water_l']
+    by['water_line_label']['paint']['text-color']=y['water_l']
+    for a in ('address','address-close'):
+        by[a]['paint']['text-color']=y['addr']
+        by[a]['minzoom']=15 if a=='address' else 16.5
+    by['address']['maxzoom']=16.5
+    by['subplace']['paint']['text-color']=y['sub']
+    loc=by['locality']
+    kd=['get','kind_detail']
+    big=['match',kd,'city',1,0]
+    loc['filter']=['==',['get','kind'],'locality']
+    loc['layout'].update({
+        'text-font':['case',['in',kd,['literal',['city','town']]],['literal',['Noto Sans Medium']],['literal',['Noto Sans Regular']]],
+        'text-size':['interpolate',['linear'],['zoom'],
+            6,['match',kd,'city',14,'town',11,9],
+            9,['match',kd,'city',18,'town',14,'village',11.5,10],
+            12,['match',kd,'city',22,'town',17,'village',14,'hamlet',12,11],
+            15,['match',kd,'city',24,'town',20,'village',17,'hamlet',14,12.5]],
+        'symbol-sort-key':['match',kd,'city',0,'town',1,'village',2,'hamlet',3,4],
+        'text-padding':3,'text-max-width':9})
+    loc['paint'].update({'text-color':['match',kd,['city','town'],y['place'],y['village']],'text-halo-width':1.8,
+                         'text-halo-color':y['label_h']})
+    del big
     return s
 
 out = {k: style(c) for k, c in PAL.items()}
