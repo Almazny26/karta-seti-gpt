@@ -280,7 +280,122 @@ def yandex_like(s,dark):
     loc['paint'].update({'text-color':['match',kd,['city','town'],y['place'],y['village']],'text-halo-width':1.8,
                          'text-halo-color':y['label_h']})
     del big
+    detail_layers(s,y,dark)
     return s
+
+# Детализация для прокладки линий (слои karta и contours, сборка 3.4.7): ЛЭП и опоры, подстанции,
+# вышки связи, водонапорные башни, полевые дороги, лесополосы, канавы, дамбы, трубопроводы,
+# курганы, отметки высот, горизонтали через 10 м; угодья — своими оттенками.
+def detail_layers(s,y,dark):
+    L=s['layers'];by={l['id']:l for l in L}
+    def at(id): return next(i for i,l in enumerate(L) if l['id']==id)
+    def ins(before,*new):
+        i=at(before)
+        L[i:i]=list(new)
+    D=dark
+    col=lambda light,darkc: darkc if D else light
+    # угодья
+    lu=by['landuse']['paint']['fill-color']
+    lu[2:2]=[['orchard'],col('#d9ecc2','#24331f'),['vineyard'],col('#e5ebc6','#2b3122'),
+             ['farmyard'],col('#efe5d8','#2d2a26'),['greenhouse_horticulture'],col('#e1eef1','#22303a'),
+             ['quarry'],col('#e4ddd2','#302c27'),['landfill'],col('#e2dacb','#312d25'),
+             ['construction','brownfield'],col('#ebe6dd','#2b2a28'),['plant_nursery'],col('#d6ebc8','#22311f'),
+             ['basin','salt_pond'],y['water']]
+    seen=set();out=lu[:2]
+    for i in range(2,len(lu)-1,2):
+        labels=[v for v in (lu[i] if isinstance(lu[i],list) else [lu[i]]) if v not in seen]
+        seen.update(labels)
+        if labels: out+= [labels,lu[i+1]]
+    out.append(lu[-1]);lu[:]=out
+    # посевные поля — едва заметная заливка с контуром межи
+    ins('water',{'id':'farmland-outline','type':'line','source':'p','source-layer':'landuse','minzoom':12,
+        'filter':['in','kind','farmland','orchard','vineyard'],
+        'paint':{'line-color':col('#e2dfcc','#2c2f28'),'line-width':['interpolate',['linear'],['zoom'],12,.4,16,1]}})
+    ins('water',{'id':'power-area','type':'fill','source':'p','source-layer':'karta','minzoom':11,
+        'filter':['all',['==','$type','Polygon'],['in','kind','substation','power_plant']],
+        'paint':{'fill-color':col('#ece2ea','#30283a'),'fill-outline-color':col('#b48cae','#7d6290')}})
+    # горизонтали
+    ins('water',{'id':'contours','type':'line','source':'p','source-layer':'contours','minzoom':11,
+        'filter':['has','ele'],
+        'paint':{'line-color':col('#c8a27c','#6b5a45'),
+                 'line-opacity':['interpolate',['linear'],['zoom'],11,['match',['get','idx'],1,.45,0],12,['match',['get','idx'],1,.6,.35],15,['match',['get','idx'],1,.75,.5]],
+                 'line-width':['interpolate',['linear'],['zoom'],11,['match',['get','idx'],1,.6,.3],16,['match',['get','idx'],1,1.3,.7]]}})
+    # канавы, трубы под дорогами, дамбы, обрывы
+    ins('buildings',{'id':'culvert','type':'line','source':'p','source-layer':'karta','minzoom':14,'filter':['==','kind','culvert'],
+        'paint':{'line-color':y['water_l'],'line-width':1.4,'line-dasharray':[1,1]}},
+        {'id':'dam','type':'line','source':'p','source-layer':'karta','minzoom':12,'filter':['in','kind','dam','weir','embankment'],
+        'paint':{'line-color':col('#a39e95','#77736b'),'line-width':['interpolate',['linear'],['zoom'],12,1,16,3.5]}},
+        {'id':'cliff','type':'line','source':'p','source-layer':'karta','minzoom':13,'filter':['==','kind','cliff'],
+        'paint':{'line-color':col('#b0927a','#7c6a5a'),'line-width':1.2,'line-dasharray':[1,1]}},
+        {'id':'tree_row','type':'line','source':'p','source-layer':'karta','minzoom':12,'filter':['in','kind','tree_row','hedge'],
+        'layout':{'line-cap':'round'},
+        'paint':{'line-color':col('#9ccb86','#3b5a34'),'line-width':['interpolate',['linear'],['zoom'],12,1.2,15,3,18,8]}})
+    # полевые дороги: коричневый пунктир, как у Яндекса
+    ins('path',{'id':'track','type':'line','source':'p','source-layer':'roads','minzoom':11,'filter':['all',['==','kind','path'],['==','kind_detail','track']],
+        'layout':{'line-cap':'butt'},
+        'paint':{'line-color':col('#bfa07a','#7b6a55'),'line-width':['interpolate',['linear'],['zoom'],11,.5,14,1.3,18,3.2],
+                 'line-dasharray':[3,1.5]}})
+    by['path']['filter']=['all',['in','kind','path','other'],['!=','kind_detail','track']]
+    # мосты: тёмная обводка
+    ins('minor_casing',{'id':'bridge-casing','type':'line','source':'p','source-layer':'roads','minzoom':13,
+        'filter':['all',['has','is_bridge'],['in','kind','minor_road','major_road','highway']],
+        'paint':{'line-color':col('#9a958d','#6b6f76'),'line-width':['interpolate',['exponential',1.6],['zoom'],13,4,15,9,18,26]}})
+    # трубопроводы и ЛЭП поверх дорог
+    first_sym=next(i for i,l in enumerate(L) if l['type'] in ('symbol','circle'))
+    L[first_sym:first_sym]=[
+        {'id':'pipeline','type':'line','source':'p','source-layer':'karta','minzoom':11,'filter':['==','kind','pipeline'],
+         'paint':{'line-color':col('#8f8a84','#9a958e'),'line-width':['interpolate',['linear'],['zoom'],11,.7,16,2],
+                  'line-dasharray':[4,2]}},
+        {'id':'power-minor','type':'line','source':'p','source-layer':'karta','minzoom':12,'filter':['in','kind','power_minor','power_cable'],
+         'paint':{'line-color':col('#9b86b3','#9a86b0'),'line-width':['interpolate',['linear'],['zoom'],12,.5,17,1.2],'line-opacity':.85}},
+        {'id':'power-line','type':'line','source':'p','source-layer':'karta','minzoom':9,'filter':['==','kind','power_line'],
+         'paint':{'line-color':col('#7d62a0','#a58cc4'),'line-width':['interpolate',['linear'],['zoom'],9,.5,13,1,17,2],'line-opacity':.9}},
+        {'id':'power-tower','type':'circle','source':'p','source-layer':'karta','minzoom':13,'filter':['in','kind','power_tower','power_pole'],
+         'paint':{'circle-radius':['interpolate',['linear'],['zoom'],13,['match',['get','kind'],'power_tower',1.6,1],17,['match',['get','kind'],'power_tower',3.6,2.4]],
+                  'circle-color':col('#6f5394','#b39ad0'),'circle-stroke-color':y['label_h'],'circle-stroke-width':.8}},
+        {'id':'landmark-point','type':'circle','source':'p','source-layer':'karta','minzoom':11,
+         'filter':['in','kind','mast','tower','water_tower','substation','power_plant','chimney','silo','storage_tank','windmill',
+                   'water_well','pumping_station','water_works','wastewater_plant','lighthouse','peak','survey_point','kurgan','dam'],
+         'paint':{'circle-radius':['interpolate',['linear'],['zoom'],11,2.4,16,4.2],
+                  'circle-color':['match',['get','kind'],['mast','tower'],'#d2462e',['water_tower','water_well','pumping_station','water_works','wastewater_plant'],'#3d79b5',
+                                  ['substation','power_plant'],'#7d62a0',['peak','survey_point'],col('#5b4a3a','#c9b8a5'),['kurgan'],'#9a6b3c','#7a7a7a'],
+                  'circle-stroke-color':y['label_h'],'circle-stroke-width':1.2}}]
+    # подписи
+    kd=['get','kind']
+    lm_name=['case',['!=',['coalesce',['get','name:ru'],['get','name'],''],''],['coalesce',['get','name:ru'],['get','name']],
+             ['match',kd,'mast','Вышка связи','tower',['case',['==',['get','tower_type'],'communication'],'Вышка связи','Вышка'],
+              'water_tower','Водонапорная башня','substation','Подстанция','power_plant','Электростанция','chimney','Труба',
+              'silo','Силос','storage_tank','Резервуар','windmill','Мельница','water_well','Скважина','pumping_station','Насосная станция',
+              'water_works','Водозабор','wastewater_plant','Очистные','lighthouse','Маяк','kurgan','Курган','dam','Плотина',
+              'peak','','survey_point','Геодезический пункт','']]
+    ele=['case',['has','ele'],['concat',['to-string',['round',['to-number',['get','ele'],0]]],' м'],'']
+    text=['case',['in',kd,['literal',['peak','survey_point']]],
+          ['case',['!=',lm_name,''],['concat',lm_name,'\n',ele],ele],lm_name]
+    L.insert(next(i for i,l in enumerate(L) if l['id']=='road_label')+1,
+        {'id':'landmark-label','type':'symbol','source':'p','source-layer':'karta','minzoom':12,
+         'filter':['in','kind','mast','tower','water_tower','substation','power_plant','chimney','silo','storage_tank','windmill',
+                   'water_well','pumping_station','water_works','wastewater_plant','lighthouse','peak','survey_point','kurgan','dam'],
+         'layout':{'text-field':text,'text-font':['Noto Sans Regular'],'text-size':['interpolate',['linear'],['zoom'],12,10,16,12],
+                   'text-anchor':'left','text-offset':[.6,0],'text-max-width':9,'text-padding':2},
+         'paint':{'text-color':['match',kd,['mast','tower'],'#b23a25',['water_tower','water_well','pumping_station','water_works','wastewater_plant'],y['water_l'],
+                                ['substation','power_plant'],col('#6a4f8c','#b9a2d4'),col('#5b4a3a','#c9b8a5')],
+                  'text-halo-color':y['label_h'],'text-halo-width':1.5}})
+    voltage=['/',['to-number',['get','voltage'],0],1000]
+    L.insert(at('landmark-label'),
+        {'id':'power-label','type':'symbol','source':'p','source-layer':'karta','minzoom':13,'filter':['==','kind','power_line'],
+         'layout':{'symbol-placement':'line','symbol-spacing':400,'text-font':['Noto Sans Regular'],'text-size':10,
+                   'text-field':['case',['>',voltage,0],['concat','ЛЭП ',['to-string',voltage],' кВ'],'ЛЭП']},
+         'paint':{'text-color':col('#6a4f8c','#b9a2d4'),'text-halo-color':y['label_h'],'text-halo-width':1.4}})
+    L.insert(at('power-label'),
+        {'id':'contour-label','type':'symbol','source':'p','source-layer':'contours','minzoom':13,
+         'filter':['any',['==',['get','idx'],1],['>=',['zoom'],14.5]],
+         'layout':{'symbol-placement':'line','symbol-spacing':350,'text-font':['Noto Sans Italic'],'text-size':9.5,
+                   'text-field':['to-string',['get','ele']],'text-max-angle':25},
+         'paint':{'text-color':col('#a9825a','#9c8669'),'text-halo-color':y['label_h'],'text-halo-width':1.2}})
+    L.insert(at('road_label'),
+        {'id':'track-label','type':'symbol','source':'p','source-layer':'roads','minzoom':14,'filter':['all',['==','kind','path'],['==','kind_detail','track']],
+         'layout':{'symbol-placement':'line','text-font':['Noto Sans Regular'],'text-size':10,'text-field':NAME},
+         'paint':{'text-color':col('#7d6448','#b9a68e'),'text-halo-color':y['label_h'],'text-halo-width':1.4}})
 
 out = {k: style(c) for k, c in PAL.items()}
 with open(OUT + "/offline-style.js", "w", encoding="utf-8") as f:
