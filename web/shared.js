@@ -1,4 +1,4 @@
-/* Shared desktop map: optimistic object transactions and presence polling. */
+/* Shared desktop map: optimistic object transactions, live updates (long polling) and presence. */
 (function () {
   'use strict';
   function saveCopy(net, label) {
@@ -32,6 +32,15 @@
   var initial = request('GET', '/api/shared'), base = initial.net, revision = initial.revision;
   var user = initial.user, online = initial.online, busy = false, panel, status, pending = null, accepted = false, polling = false;
   var copy = function (v) { return JSON.parse(JSON.stringify(v)); };
+  /* Правки, которые сервер ещё не подтвердил, лежат и в браузере: переживают перезагрузку страницы и
+     уходят сами, когда связь вернётся. Ключ не начинается с karta_/wf_ — pc.js не пишет его в state.json. */
+  var pendingBase = null, PKEY = 'shared_pending_' + user.login;
+  function storePending() {
+    try {
+      if (pending) localStorage.setItem(PKEY, JSON.stringify({base: pendingBase, net: pending, t: Date.now()}));
+      else localStorage.removeItem(PKEY);
+    } catch (e) { /* память браузера заполнена — правка остаётся в окне */ }
+  }
   var J = function (v) { return v === undefined ? '' : JSON.stringify(v); };
   var FIELD = {name:'название', kind:'вид', state:'состояние', addr:'адрес', note:'примечание', lat:'положение', lng:'положение',
     fnodes:'трасса', points:'точки', lay:'прокладка', deleted:'удаление'};
@@ -65,7 +74,8 @@
         c.append(cl, cs, String(online.length));
         status.append(n, c);
       }
-      status.title = pending ? 'Нажмите, чтобы повторить сохранение. Не закрывайте страницу.' : name + ' · ' + ({admin:'Администратор',editor:'Редактор',viewer:'Просмотр'})[user.role] + ' · в сети ' + online.length;
+      status.title = pending ? 'Правки ещё не на сервере. Они хранятся в этом браузере и отправятся сами, когда появится связь. Нажмите, чтобы повторить сейчас.' :
+        name + ' · ' + ({admin:'Администратор',editor:'Редактор',viewer:'Просмотр'})[user.role] + ' · в сети ' + online.length + ' · все правки сохранены на сервере';
       status.style.color = pending ? 'var(--danger,#b42318)' : 'var(--accent,#145db0)';
     }
   }
@@ -81,14 +91,17 @@
     hasPending: function () { return !!pending; },
     wasAccepted: function () { return accepted; },
     showUsers: function () { participants('access'); },
-    commit: function (net) {
+    commit: function (net, opts) {
       accepted = false;
-      var ids = new Set(Object.keys(base.objs).concat(Object.keys(net.objs))), ops = [];
+      opts = opts || {};
+      // Правки считаются от той версии карты, с которой их начинали (пока они не приняты, она не меняется).
+      var from = opts.base || (pending && pendingBase) || base;
+      var ids = new Set(Object.keys(from.objs).concat(Object.keys(net.objs))), ops = [];
       ids.forEach(function (id) {
-        var before = base.objs[id] || null, after = net.objs[id] || null;
+        var before = from.objs[id] || null, after = net.objs[id] || null;
         if (JSON.stringify(before) !== JSON.stringify(after)) ops.push({id: id, before: before, after: after});
       });
-      if (!ops.length) { pending = null; info(); return copy(base); }
+      if (!ops.length) { pending = null; pendingBase = null; storePending(); info(); return copy(base); }
       if (user.role === 'viewer') { alert('У вашей учётной записи доступен только просмотр'); return copy(base); }
       busy = true;
       try {
@@ -127,12 +140,12 @@
           }
         }
         adopt(data);
-        pending = null; info();
+        pending = null; pendingBase = null; storePending(); info();
         return copy(base);
       } catch (error) {
         var firstFailure = !pending;
-        pending = copy(net); info();
-        if (firstFailure && error.message !== 'Требуется вход') alert('Изменения пока не сохранены: ' + error.message + '. Не закрывайте страницу. Нажмите красную кнопку пользователя, чтобы повторить сохранение.');
+        pending = copy(net); pendingBase = copy(from); storePending(); info();
+        if (firstFailure && !opts.silent && error.message !== 'Требуется вход') alert('Изменения пока не сохранены на сервере: ' + error.message + '. Они хранятся в этом браузере и отправятся сами, когда связь восстановится (кнопка пользователя вверху станет синей).');
         return copy(net);
       } finally { busy = false; }
     }
@@ -297,6 +310,77 @@
     show(startTab === 'access' && access ? 'access' : 'members');
     currentPanel.showModal();
   }
+  /* Прямой эфир: окно ждёт на сервере следующую правку (длинный опрос, до 10 с на запрос) и получает её
+     сразу после записи на диск. Если сервер ответил мгновенно без изменений (старая версия без ожидания) —
+     обычный опрос раз в секунду. Пока человек рисует линию или заполняет форму, чужие правки
+     откладываются (deferred) и показываются сразу после этого. */
+  var deferred = null, failures = 0;
+  var wake = null;
+  function sleep(ms) {
+    return new Promise(function (r) {
+      var t = setTimeout(function () { wake = null; r(); }, ms);
+      wake = function () { clearTimeout(t); wake = null; r(); };
+    });
+  }
+  var current = null;
+  window.addEventListener('online', function () {   // сеть вернулась — отправить отложенное и переподключиться сразу
+    if (!window.KartaApp) return;
+    retryPending();
+    if (current) current.abort();
+    if (wake) wake();
+  });
+  function editing() {
+    var c = window.KartaApp.state(), a = document.activeElement;
+    return c.tool || (c.view && c.view.k === 'pt') || document.querySelector('#apDlg.show') || (a && a.matches && a.matches('input,textarea,select') && a.closest('#apSheet,#apDlg,dialog'));
+  }
+  function retryPending() {
+    if (!pending || busy || editing()) return;
+    var net = window.KartaShared.commit(pending, {silent: true});
+    window.KartaApp.receiveShared(net);
+  }
+  function flush() {
+    if (!deferred || !window.KartaApp) return;
+    var d = deferred;
+    if (busy || d.revision < revision) { if (!busy) deferred = null; return; }
+    if (pending || editing()) return;
+    deferred = null;
+    adopt(d);
+    window.KartaApp.receiveShared(copy(base));
+  }
+  function restorePending() {
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem(PKEY) || 'null'); } catch (e) { saved = null; }
+    if (!saved || !saved.net || !saved.base || !window.KartaApp) return;
+    var net = window.KartaShared.commit(saved.net, {base: saved.base, silent: true});
+    window.KartaApp.receiveShared(net);
+  }
+  async function loop() {
+    var restored = false;
+    for (;;) {
+      if (busy || window.KartaPCSwitching || !window.KartaApp) { await sleep(300); continue; }
+      if (!restored) { restored = true; restorePending(); }
+      var started = Date.now(), timer = null;
+      try {
+        var ctl = current = window.AbortController ? new AbortController() : null;
+        if (ctl) timer = setTimeout(function () { ctl.abort(); }, 25000);
+        var known = deferred ? deferred.revision : revision;
+        var response = await fetch('/api/shared?revision=' + known + '&wait=10', {cache: 'no-store', signal: ctl ? ctl.signal : undefined});
+        if (response.status === 401) { toLogin(pending); return; }
+        if (!response.ok) throw Error('Нет связи');
+        var data = await response.json();
+        failures = 0;
+        retryPending();
+        if (data.net) deferred = data;
+        else if (!busy) { user = data.user; online = data.online; info(); }
+        flush();
+        if (!data.net && Date.now() - started < 150) await sleep(1000);
+      } catch (e) {
+        failures++;
+        if (status) status.textContent = pending ? 'Правки не сохранены — повторить' : 'Нет связи с сервером · повторное подключение';
+        await sleep(Math.min(3000, 400 * failures));
+      } finally { if (timer) clearTimeout(timer); current = null; }
+    }
+  }
   var usersCSS = document.createElement('link'); usersCSS.rel = 'stylesheet'; usersCSS.href = 'users.css'; document.head.appendChild(usersCSS);
   document.addEventListener('DOMContentLoaded', function () {
     status = element('button', '', document.getElementById('apBar'));
@@ -308,24 +392,7 @@
       if (pending) { var net = window.KartaShared.commit(pending); if (!pending) window.KartaApp.receiveShared(net); }
       else participants();
     }; info();
-    setInterval(async function () {
-      if (busy || polling || window.KartaPCSwitching || !window.KartaApp || document.hidden) return;
-      polling = true;
-      // Polling also acts as a heartbeat while a route/form is being edited.
-      try {
-        var response = await fetch('/api/shared?revision=' + revision, {cache:'no-store'});
-        if (response.status === 401) { toLogin(pending); return; }
-        if (!response.ok) throw Error('Нет связи');
-        var data = await response.json();
-        if (busy || data.revision < revision) return;
-        var current = window.KartaApp.state();
-        if (pending || current.tool || (current.view && current.view.k === 'pt') || document.querySelector('#apDlg.show') || document.activeElement.matches('input,textarea,select')) {
-          user = data.user; online = data.online; info(); return;
-        }
-        adopt(data);
-        if (data.net) window.KartaApp.receiveShared(copy(base));
-      } catch (e) { status.textContent = pending ? 'Правки не сохранены — повторить' : 'Нет связи с сервером · повторное подключение'; }
-      finally { polling = false; }
-    }, 2000);
+    setInterval(flush, 250);
+    loop();
   });
 })();

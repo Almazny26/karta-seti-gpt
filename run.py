@@ -1075,7 +1075,10 @@ def make_handler(app):
                     self.shared_user = dict(login='@server', name=app.local_name, role='admin')
                     self.shared_token = ''
                     with app.shared.lock:
+                        before = getattr(app.shared, 'local_presence', None)
                         app.shared.local_presence = (self.shared_user, time.time())
+                        if not before or time.time() - before[1] >= 15:
+                            app.shared.changed.notify_all()
                 else:
                     try:
                         self.shared_user, self.shared_token = app.shared.identify(self.headers.get('Cookie'))
@@ -1181,7 +1184,15 @@ def make_handler(app):
                     return self._json({'backups': shared.list_backups()})
                 if route == 'shared':
                     if self.command == 'GET':
-                        revision = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get('revision', [None])[0]
+                        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                        revision = query.get('revision', [None])[0]
+                        try:
+                            wait = float(query.get('wait', ['0'])[0])
+                        except ValueError:
+                            wait = 0
+                        if wait > 0 and revision is not None and not getattr(app, 'restarting', False):
+                            # длинный опрос: ответ приходит сразу после чужой правки
+                            return self._json(shared.wait(user, revision, wait))
                         return self._json(shared.snapshot(user, revision))
                     if self.command == 'POST':
                         body = self._body()
@@ -1657,6 +1668,8 @@ def serve_desktop(args, data_dir):
         args.shared = enabled
         restart[0] = True
         the_app.restarting = True
+        if getattr(the_app, 'shared', None):
+            the_app.shared.notify()   # отпустить окна, ждущие правок, — они переподключатся к новому режиму
     the_app.change_access = change_access
     def resolve_addresses():
         import socket

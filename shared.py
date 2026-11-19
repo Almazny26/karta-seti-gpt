@@ -27,10 +27,10 @@ def atomic_write(path, data, attempts=10):
     with open(tmp, 'wb') as f:
         f.write(data)
         f.flush()
-        os.fsync(f.fileno())
+        os.fsync(f.fileno())   # на Windows — FlushFileBuffers: данные на диске до ответа пользователю
     for attempt in range(attempts):
         try:
-            os.replace(tmp, path)
+            _replace_durable(tmp, path)
             return
         except PermissionError:
             if attempt == attempts - 1:
@@ -40,6 +40,39 @@ def atomic_write(path, data, attempts=10):
                     pass
                 raise
             time.sleep(0.05 * (attempt + 1))
+
+
+def _replace_durable(tmp, path):
+    """os.replace, после которого и новое имя файла уже на диске (на случай отключения питания)."""
+    if os.name == 'nt':
+        try:
+            import ctypes
+            kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+            move = kernel32.MoveFileExW
+            move.argtypes = (ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32)
+            move.restype = ctypes.c_int
+        except (ImportError, AttributeError, OSError):
+            move = None
+        if move is not None:
+            # MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH: функция возвращается, когда замена записана на диск
+            if move(os.path.abspath(tmp), os.path.abspath(path), 0x1 | 0x8):
+                return
+            err = ctypes.get_last_error()
+            if err in (5, 32, 33):   # доступ запрещён / файл занят антивирусом или копированием
+                raise PermissionError(err, 'Файл занят', path)
+        os.replace(tmp, path)
+        return
+    os.replace(tmp, path)
+    try:
+        fd = os.open(os.path.dirname(os.path.abspath(path)) or '.', os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)   # запись о новом имени в каталоге — тоже на диск
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
 
 
 def read_json(path, what):
@@ -123,7 +156,15 @@ class Shared:
         self.folder = folder
         self.path = os.path.join(folder, 'shared-users.json')
         self.sessions_path = os.path.join(folder, 'shared-sessions.json')
+        # Обрывки записи, прерванной отключением питания (сам файл при этом цел — замена атомарная).
+        for n in os.listdir(folder):
+            if n.endswith('.tmp') and n.split('.json.')[0] + '.json' in ('state.json', 'shared-users.json', 'shared-sessions.json'):
+                try:
+                    os.remove(os.path.join(folder, n))
+                except OSError:
+                    pass
         self.lock = threading.RLock()
+        self.changed = threading.Condition(self.lock)   # будит ожидающие запросы окон при каждой правке
         self.failures = {}
         if os.path.exists(self.path):
             self.users = read_json(self.path, 'учётных записей')
@@ -162,12 +203,37 @@ class Shared:
 
     def bump(self):
         self.revision = max(self.revision + 1, int(time.time() * 1000))
+        self.changed.notify_all()
         return self.revision
+
+    def notify(self):
+        with self.lock:
+            self.changed.notify_all()
+
+    def wait(self, user, revision, timeout):
+        """Длинный опрос: ответить сразу, если карта изменилась, иначе ждать правки (или входа/выхода
+        участника) не дольше timeout секунд. Так окна получают правки за доли секунды, без частого опроса."""
+        deadline = time.monotonic() + max(0.0, min(float(timeout), 25.0))
+        with self.lock:
+            presence = self._presence_key()
+            while revision == str(self.revision) and self._presence_key() == presence:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    break
+                self.changed.wait(left)
+            return self.snapshot(user, revision)
+
+    def _presence_key(self):
+        now = time.time()
+        logins = sorted({s['login'] for s in self.sessions.values() if now - s['seen'] < 15})
+        local = getattr(self, 'local_presence', None)
+        return (tuple(logins), bool(local and now - local[1] < 15))
 
     def logout(self, key):
         with self.lock:
             if self.sessions.pop(key, None) is not None:
                 self._save_sessions()
+                self.changed.notify_all()
 
     def set_user(self, data, local_owner=False):
         if not isinstance(data, dict):
@@ -229,6 +295,7 @@ class Shared:
             token = secrets.token_urlsafe(32)
             self.sessions[token_key(token)] = dict(login=user['login'], ip=ip, seen=time.time(), since=time.time())
             self._save_sessions()
+            self.changed.notify_all()
             return token
 
     def identify(self, cookie):
@@ -245,7 +312,10 @@ class Shared:
                 if self.sessions.pop(key, None) is not None:
                     self._save_sessions()
                 raise SharedError(401, 'Войдите в программу')
+            returned = time.time() - session['seen'] >= 15   # участник снова в сети — сообщить остальным
             session['seen'] = time.time()
+            if returned:
+                self.changed.notify_all()
             if session['seen'] - session.get('saved', 0) > 300:
                 self._save_sessions()
             return self.public(self.users[session['login']]), key
