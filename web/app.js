@@ -1100,7 +1100,7 @@
     } else {
       var pts = ptsOf(o), lay = layOf(o), L2 = lens(o), total = lenOf(pts), a = pts[0], b = pts[pts.length - 1];
       var kinds = {};
-      pts.forEach(function (p) { if (!p.nid) kinds[p.kind] = (kinds[p.kind] || 0) + 1; });
+      pts.forEach(function (p) { if (!p.nid) { var k = pc ? p.kind || 'точка' : p.kind; kinds[k] = (kinds[k] || 0) + 1; } });
       html += '<div class="muted">' + TYPE_NAME[o.type] + '</div><table class="kv">' +
         kvRow('Протяжённость', '<b>' + len(total) + '</b>') +
         (o.type === 'fiber' ? kvRow('По опорам', L2.air ? len(L2.air) : '—') + kvRow('В земле', L2.ground ? len(L2.ground) : '—') : '') +
@@ -1807,6 +1807,7 @@
     var tl = [40, 40], br = [40, 40], r = map.getContainer().getBoundingClientRect();
     if (panelW()) tl[0] = panelW() - r.left + 30;
     if (sheetH()) br[1] = Math.min(sheetH() + 30, r.height * 0.7);
+    if (pc) { br[0] = 80; tl[1] = 70; }   // справа — столбик кнопок масштаба, сверху — шапка
     return { paddingTopLeft: tl, paddingBottomRight: br };
   }
   function centerAt(ll, z) {
@@ -1938,6 +1939,7 @@
   function mb(n) { return Math.round((n || 0) / 1048576) + ' МБ'; }
   function offlineOpen() { return dlg.classList.contains('show') && dlgBox.getAttribute('data-offline'); }
   function showOffline() {
+    var mapOwner = !shared || !shared.isOwner || shared.isOwner();   // в совместном режиме файлы карты меняет только серверный компьютер
     if (pc) return;
     if (pc) fetch('/api/map').then(function (r) { return r.json(); }).then(function (st) { renderOffline(st.files || [], st.job); }, function () { renderOffline([], null); });
     else renderOffline(window.KartaMap ? window.KartaMap.info().files : [], mapJob);
@@ -1962,6 +1964,7 @@
       var r = '<div class="srow"><span>' + esc(g.name) + '<small>' + st + '</small></span>';
       if (busy) r += '<button type="button" class="b t" data-a="cancel">Отмена</button>' + bar();
       else {
+        if (!mapOwner) return r + '</div>';
         if (pc ? !f && !combined : !f || !fs) r += '<button type="button" class="b" data-dl="' + (pc ? g.slug : f ? g.slug + '-sat' : fs ? g.slug : g.slug + ',' + g.slug + '-sat') + '"' + (run ? ' disabled' : '') + '>' +
           (f ? 'Скачать снимки' : fs ? 'Скачать схему' : 'Скачать') + '</button>';
         if (f || fs) r += '<button type="button" class="b d" data-del="' + [f && g.slug, fs && g.slug + '-sat'].filter(Boolean).join(',') + '">Удалить</button>';
@@ -1972,12 +1975,12 @@
     var other = files.filter(function (f) { return !REGIONS.some(function (g) { return g.slug === f.slug || g.slug + '-sat' === f.slug; }); });
     if (other.length) html += '<div class="sec">Другие файлы карт</div>' + other.map(function (f) {
       return '<div class="srow"><span>' + esc(f.name && f.name !== f.slug ? f.name : f.slug) + '<small>' + (f.kind === 'sat' ? 'снимки' : 'схема') + ', ' + mb(f.size) + '</small></span>' +
-        '<button type="button" class="b d" data-del="' + esc(f.slug) + '">Удалить</button></div>';
+        (mapOwner ? '<button type="button" class="b d" data-del="' + esc(f.slug) + '">Удалить</button>' : '') + '</div>';
     }).join('');
     if (job && job.state === 'error') html += '<p style="color:var(--danger)">Не скачалось: ' + esc(job.error || '') + '</p>';
     html += (pc ? '' : '<p class="muted">Снимки района — съёмка Sentinel-2, 10 м на точку: видны поля, лесополосы, реки, дороги, кварталы. Более подробные снимки (отдельные дома, опоры) подгружаются из интернета сами и остаются на устройстве там, где вы их уже смотрели. Целую область в таком качестве скачать нельзя: это десятки гигабайт, и владельцы этих снимков массовое скачивание запрещают.</p>') +
-      '<div class="sec">Файл карты — с этого устройства</div><p class="muted">Файл района (.pmtiles), присланный с другого телефона или компьютера.</p>' +
-      btnRow([['pick', 'Выбрать файл…', 't']]) +
+      (mapOwner ? '<div class="sec">Файл карты — с этого устройства</div><p class="muted">Файл района (.pmtiles), присланный с другого телефона или компьютера.</p>' +
+      btnRow([['pick', 'Выбрать файл…', 't']]) : '<p class="muted">Файлы карты устанавливаются и удаляются только на серверном компьютере.</p>') +
       '<div class="row"><button type="button" class="b t" id="apNo">Закрыть</button></div>';
     openDlg(html);
     dlgBox.setAttribute('data-offline', '1');
@@ -2217,7 +2220,8 @@
       (android ? btnRow([['share', 'Поделиться файлом'], ['save', 'Сохранить в файл', 't']]) : btnRow([['save', 'Сохранить в файл']])) +
       (editable ? '<div class="sec">Загрузить карту из файла</div><p class="muted">Покажу, что изменится, и спрошу: добавить новое к вашей карте или заменить её целиком.</p>' +
       btnRow([['open', 'Открыть файл…', 't']]) : '<p class="muted">В вашей учётной записи доступен просмотр и экспорт общей карты.</p>') +
-      (prev && editable ? '<div class="sec">Ошиблись?</div>' + btnRow([['undo', 'Вернуть карту, какой она была до загрузки', 'd']]) : '') +
+      (prev && editable && !shared ? '<div class="sec">Ошиблись?</div>' + btnRow([['undo', 'Вернуть карту, какой она была до загрузки', 'd']]) : '') +
+      (shared && shared.user().role === 'admin' ? '<div class="sec">Ошиблись?</div><p class="muted">Общую карту можно вернуть из резервной копии: имя пользователя вверху → «Копии».</p>' : '') +
       (exNote ? '<p class="muted" style="color:var(--text)">' + exNote + '</p>' : '') +
       '<div class="row"><button type="button" class="b t" id="apNo">Закрыть</button></div>');
     exNote = '';
@@ -2255,8 +2259,9 @@
     else {
       html += '<div class="srow"><span><b>Добавить новое</b><small>Добавится ' + mg.add.length + ', обновится ' + mg.ch.length + '. Удаления из файла не применяются.</small></span>' +
         '<button type="button" class="b" data-a="merge">' + (mg.conflicts.length ? 'Выбрать трассы' : 'Добавить') + '</button></div>' +
-        '<div class="srow"><span><b>Заменить всю карту</b><small>станет точно как в файле: добавится ' + d.add.length + ', изменится ' + d.ch.length + ', удалится ' + d.del.length + '</small></span>' +
-        '<button type="button" class="b d" data-a="replace">Заменить</button></div>';
+        (shared && shared.user().role !== 'admin' ? '<p class="muted">Заменить всю общую карту может только администратор.</p>' :
+        '<div class="srow"><span><b>Заменить всю карту</b><small>станет точно как в файле: добавится ' + d.add.length + ', изменится ' + d.ch.length + ', удалится ' + d.del.length + (shared ? '. Перед заменой сервер сохранит копию текущей карты' : '') + '</small></span>' +
+        '<button type="button" class="b d" data-a="replace">Заменить</button></div>');
       var absent = d.del.filter(function (o) { return !p.data.net.objs[o.id]; });
       if (mg.add.length) html += '<div class="sec">Новые объекты · ' + mg.add.length + '</div>' + mg.add.map(function (o) { return objLine(o); }).join('');
       if (mg.ch.length) html += '<div class="sec">Обновятся существующие · ' + mg.ch.length + '</div>' + mg.ch.map(function (x) { return objLine(x.o, x.fields.join(', ')); }).join('');

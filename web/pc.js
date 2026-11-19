@@ -15,7 +15,7 @@
 
   window.KartaPC = true;
   window.KartaOfflineOnly = true;
-  var EXPECTED = '3.4.5';   // версия run.py, для которой написана эта страница
+  var EXPECTED = '3.4.6';   // версия run.py, для которой написана эта страница
   window.KartaPCVersion = EXPECTED;
   var OWN = /^(wf_|karta_)/;
 
@@ -66,8 +66,58 @@
   } catch (e) { /* программа не ответила — работаем с тем, что есть в браузере */ }
 
   setItem.call(localStorage, 'wf_online', '0');
+
+  // ---------------------------------------------------------------- одно окно (обычный режим)
+  // Каждое окно держит свою копию сети и записывает на диск всю карту целиком: два окна затёрли бы
+  // правки друг друга. Работает одно окно, остальные показывают заставку «открыто в другом окне».
+  var WIN_KEY = 'pc_window', winId = Math.random().toString(36).slice(2) + Date.now().toString(36), passive = false, cover = null;
+  function readWin() { try { return JSON.parse(localStorage.getItem(WIN_KEY) || 'null'); } catch (e) { return null; } }
+  function claim() { setItem.call(localStorage, WIN_KEY, JSON.stringify({ id: winId, t: Date.now() })); }
+  function showCover() {
+    if (cover || !document.body) return;
+    cover = document.createElement('div');
+    cover.id = 'pcOtherWindow';
+    cover.setAttribute('role', 'alertdialog');
+    cover.style.cssText = 'position:fixed;inset:0;z-index:300000;display:grid;place-items:center;background:rgba(20,22,26,.72);font:16px/1.45 system-ui,sans-serif';
+    var box = document.createElement('div');
+    box.style.cssText = 'box-sizing:border-box;width:min(460px,92vw);background:#fff;color:#111;border-radius:16px;padding:24px;box-shadow:0 12px 60px #0006';
+    var h = document.createElement('h2'); h.textContent = 'Программа открыта в другом окне'; h.style.margin = '0 0 10px';
+    var p = document.createElement('p'); p.style.margin = '0 0 18px';
+    p.textContent = 'Работайте в одном окне: два окна записывали бы карту по очереди и затирали правки друг друга. Это окно ничего не сохраняет.';
+    var b = document.createElement('button'); b.type = 'button'; b.textContent = 'Работать в этом окне';
+    b.style.cssText = 'display:block;width:100%;min-height:44px;border:0;border-radius:10px;background:#007aff;color:#fff;font:inherit;cursor:pointer';
+    b.onclick = function () { try { sessionStorage.setItem('pc_take', '1'); } catch (e) { /* ничего */ } location.reload(); };
+    box.append(h, p, b); cover.appendChild(box); document.body.appendChild(cover);
+  }
+  function becomePassive() {
+    passive = true;
+    if (document.body) showCover(); else document.addEventListener('DOMContentLoaded', showCover);
+  }
+  if (!window.KartaSharedMode) {
+    var take = false;
+    try { take = sessionStorage.getItem('pc_take') === '1'; sessionStorage.removeItem('pc_take'); } catch (e) { /* ничего */ }
+    var other = readWin();
+    if (!take && other && other.id !== winId && Date.now() - other.t < 6000) becomePassive();
+    else claim();
+    setInterval(function () {
+      if (passive) return;
+      var c = readWin();
+      if (c && c.id !== winId && Date.now() - c.t < 6000) becomePassive(); else claim();
+    }, 2000);
+    window.addEventListener('storage', function (e) {
+      if (e.key !== WIN_KEY || passive) return;
+      var c = readWin();
+      if (c && c.id !== winId) becomePassive();
+    });
+    window.addEventListener('pagehide', function () {
+      var c = readWin();
+      if (!passive && c && c.id === winId) removeItem.call(localStorage, WIN_KEY);
+    });
+  }
+  window.KartaPCPassive = function () { return passive; };
+
   function persist() {
-    if (window.KartaSharedMode || window.KartaPCSwitching) return;
+    if (window.KartaSharedMode || window.KartaPCSwitching || passive) return;
     var all = {};
     for (var i = 0; i < localStorage.length; i++) {
       var k = localStorage.key(i);
@@ -82,10 +132,12 @@
     warnSave(!ok);
   }
   proto.setItem = function (k, v) {
+    if (passive && this === localStorage && OWN.test(k)) return;   // неактивное окно не трогает общие данные
     setItem.call(this, k, v);
     if (this === localStorage && OWN.test(k)) persist();
   };
   proto.removeItem = function (k) {
+    if (passive && this === localStorage && OWN.test(k)) return;
     removeItem.call(this, k);
     if (this === localStorage && OWN.test(k)) persist();
   };
@@ -106,13 +158,19 @@
   ];
   if (window.L && L.tileLayer) {
     var tileLayer = L.tileLayer;
+    var BLANK = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
     L.tileLayer = function (url, opts) {
+      var rewritten = false;
       if (typeof url === 'string') {
         for (var i = 0; i < REWRITE.length; i++) {
-          if (REWRITE[i][0].test(url)) { url = url.replace(REWRITE[i][0], REWRITE[i][1]); break; }
+          if (REWRITE[i][0].test(url)) { url = url.replace(REWRITE[i][0], REWRITE[i][1]); rewritten = true; break; }
         }
       }
-      return tileLayer.call(this, url, opts);
+      var layer = tileLayer.call(this, url, opts);
+      // На ПК только офлайн-схема: старые растровые и онлайн-подложки (осталось от телефона) не
+      // запрашиваются вовсе, иначе каждый сдвиг карты давал десятки ответов 404.
+      if (rewritten && window.KartaOfflineOnly) layer.getTileUrl = function () { return BLANK; };
+      return layer;
     };
     // Браузер грузит с одного адреса не больше 6 плиток сразу. Программа отвечает и по адресам
     // t1…t4.localhost (это тот же компьютер) — плитки идут вчетверо параллельнее. Сначала проверяем,

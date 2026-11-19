@@ -36,11 +36,14 @@ import webbrowser
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from shared import atomic_write  # noqa: E402
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(ROOT, "web")
 HOST = "127.0.0.1"
-PORT = 8793 if os.path.basename(ROOT).endswith(" GPT") else 8790
-VERSION = "3.4.5"
+PORT = 8793   # стандартный порт; другой — «--port N», он запоминается в data/remote-access.json
+VERSION = "3.4.6"
 
 mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("application/json", ".json")
@@ -150,12 +153,16 @@ class State:
 
     def save(self, data):
         with self.lock:
-            tmp = self.path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp, self.path)
+            atomic_write(self.path, json.dumps(data, ensure_ascii=False))
+
+    def read_bytes(self):
+        """Содержимое файла под той же блокировкой, что и запись (для резервной копии)."""
+        with self.lock:
+            try:
+                with open(self.path, "rb") as f:
+                    return f.read()
+            except FileNotFoundError:
+                return None
 
 
 class Tiles:
@@ -518,12 +525,36 @@ class OfflineMap:
         with self.lock:
             f.close()
             self.files.pop(slug, None)
-        for ext in (".pmtiles", ".pmtiles.json"):
-            try:
-                os.remove(os.path.join(self.dir, slug + ext))
-            except OSError:
-                pass
+            self._to_trash(slug)
         return True
+
+    def _to_trash(self, slug, keep=2):
+        """Удалённый или заменённый файл карты не стирается сразу, а уходит в map/удалённые
+        (хранятся два последних): случайное удаление можно отменить, вернув файл назад."""
+        trash = os.path.join(self.dir, "удалённые")
+        stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+        for ext in (".pmtiles", ".pmtiles.json"):
+            src = os.path.join(self.dir, slug + ext)
+            if not os.path.exists(src):
+                continue
+            try:
+                os.makedirs(trash, exist_ok=True)
+                os.replace(src, os.path.join(trash, "%s-%s%s" % (slug, stamp, ext)))
+            except OSError:
+                try:
+                    os.remove(src)
+                except OSError:
+                    pass
+        try:
+            old = sorted(n for n in os.listdir(trash) if n.startswith(slug + "-") and n.endswith(".pmtiles"))
+            for n in old[:-keep]:
+                for ext in ("", ".json"):
+                    try:
+                        os.remove(os.path.join(trash, n + ext))
+                    except OSError:
+                        pass
+        except OSError:
+            pass
 
     @staticmethod
     def safe_slug(name):
@@ -570,6 +601,8 @@ class OfflineMap:
             old = self.files.pop(slug, None)
             if old:
                 old.close()
+            if os.path.exists(os.path.join(self.dir, slug + ".pmtiles")):
+                self._to_trash(slug)
             os.replace(tmp, os.path.join(self.dir, slug + ".pmtiles"))
         self.scan()
 
@@ -1010,6 +1043,7 @@ def make_handler(app):
                 self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
             if getattr(app, 'restarting', False):
                 self.close_connection = True
                 self.send_header('Connection', 'close')
@@ -1047,7 +1081,7 @@ def make_handler(app):
                         self.shared_user, self.shared_token = app.shared.identify(self.headers.get('Cookie'))
                     except SharedError as e:
                         raise HttpError(e.status, e.message)
-                if self.command == 'POST' and route not in ('/api/shared', '/api/users', '/api/logout', '/api/map', '/api/mapupload', '/api/access'):
+                if self.command == 'POST' and route not in ('/api/shared', '/api/users', '/api/logout', '/api/map', '/api/mapupload', '/api/access', '/api/elev', '/api/backups'):
                     raise HttpError(403, 'Действие недоступно в совместном режиме')
                 return
             host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
@@ -1126,14 +1160,25 @@ def make_handler(app):
                     return self._json({'ok': True}, extra={'Set-Cookie': 'karta_session=' + token + '; HttpOnly; SameSite=Strict; Path=/'})
                 if route == 'logout' and self.command == 'POST':
                     self._body(1024)
-                    with shared.lock:
-                        shared.sessions.pop(self.shared_token, None)
+                    shared.logout(self.shared_token)
                     return self._json({'ok': True}, extra={'Set-Cookie': 'karta_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict'})
                 user = self.shared_user
+                owner = user['login'] == '@server'   # сам серверный компьютер
                 if route == 'access':
                     if user['role'] != 'admin':
                         raise HttpError(403, 'Только администратор может управлять удалённым доступом')
+                    if self.command == 'POST' and not owner:
+                        raise HttpError(403, 'Включать и выключать удалённый доступ можно только на серверном компьютере')
                     return self._api(route)
+                if route == 'elev' and self.command == 'POST':
+                    return self._api(route)
+                if route == 'backups' and user['role'] == 'admin':
+                    if self.command == 'POST':
+                        b = self._body(4096)
+                        if not isinstance(b, dict) or not b.get('restore'):
+                            raise HttpError(400, 'Неверный запрос')
+                        return self._json(shared.restore(user, b['restore']))
+                    return self._json({'backups': shared.list_backups()})
                 if route == 'shared':
                     if self.command == 'GET':
                         revision = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get('revision', [None])[0]
@@ -1154,6 +1199,8 @@ def make_handler(app):
                 if route in ('map', 'info') and self.command == 'GET':
                     return self._api(route)
                 if route in ('map', 'mapupload') and self.command == 'POST' and user['role'] == 'admin':
+                    if not owner:
+                        raise HttpError(403, 'Файлы карты меняются только на серверном компьютере')
                     return self._api(route)
                 raise HttpError(403, 'Нет доступа к этому действию')
             except SharedError as e:
@@ -1182,15 +1229,28 @@ def make_handler(app):
                     raise HttpError(503, 'Программа переключает режим подключения')
                 if not isinstance(data, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in data.items()):
                     raise HttpError(400, "Неверные данные")
+                # массовое удаление (замена карты файлом, откат) — сначала снимок прежней карты
+                from shared import alive_count, write_snapshot
+                old = app.state.load() or {}
+                if old.get("karta_net") and old.get("karta_net") != data.get("karta_net") and \
+                        alive_count(data.get("karta_net", "")) <= alive_count(old["karta_net"]) - 5:
+                    try:
+                        write_snapshot(os.path.join(app.data_dir, "backups"), old, "mass")
+                    except OSError as e:
+                        app.log("Не удалось сохранить снимок перед массовой правкой: %s" % e)
                 app.state.save(data)
                 return self._json({"ok": True})
             if route == "elev" and self.command == "POST":
                 b = self._body(limit=1024 * 1024)
+                if not isinstance(b, dict):
+                    raise HttpError(400, "Неверный запрос")
                 return self._json(fetch_elevations(app.dem, str(b.get("locs") or ""), bool(b.get("online")) and not app.offline_only))
             if route == "map" and self.command == "GET":
                 return self._json(app.offline.status())
             if route == "map" and self.command == "POST":
                 b = self._body(limit=64 * 1024)
+                if not isinstance(b, dict):
+                    raise HttpError(400, "Неверный запрос")
                 if b.get("download"):
                     return self._json({"ok": app.offline.start(b["download"])})
                 if b.get("delete"):
@@ -1304,6 +1364,7 @@ class App:
                     self.addresses = [ip]
         except OSError:
             pass
+        self.data_dir = data_dir
         self.state = State(data_dir)
         self.tiles = Tiles(enabled=False)
         self.tilecache = TileCache(data_dir, self.state)
@@ -1341,21 +1402,63 @@ class Log:
                 pass
 
 
-def backup_loop(data_dir, log, keep=30, stop=None):
-    """Раз в сутки копия data/state.json в data/backups; хранятся последние 30."""
+def backup_once(data_dir, state=None, hourly_keep=72, daily_keep=30, now=None):
+    """Копии data/state.json и data/shared-users.json в data/backups.
+
+    Каждый час, если карта изменилась, — state-ГГГГ-ММ-ДД_ЧЧ.json (последние 72), плюс первая копия
+    за день — state-ГГГГ-ММ-ДД.json (последние 30). Так же для учётных записей (users-…)."""
     folder = os.path.join(data_dir, "backups")
     os.makedirs(folder, exist_ok=True)
-    pattern = re.compile(r"^state-\d{4}-\d{2}-\d{2}\.json$")
+    now = now or time.localtime()
+    made = []
+    for prefix, src in (("state", "state.json"), ("users", "shared-users.json")):
+        path = os.path.join(data_dir, src)
+        if prefix == "state" and state is not None:
+            data = state.read_bytes()
+        else:
+            try:
+                with open(path, "rb") as f:
+                    data = f.read()
+            except FileNotFoundError:
+                data = None
+        if not data:
+            continue
+        hourly = re.compile(r"^%s-\d{4}-\d{2}-\d{2}_\d{2}\.json$" % prefix)
+        daily = re.compile(r"^%s-\d{4}-\d{2}-\d{2}\.json$" % prefix)
+        names = sorted(os.listdir(folder))
+        last = [n for n in names if hourly.match(n)]
+        changed = True
+        if last:
+            try:
+                with open(os.path.join(folder, last[-1]), "rb") as f:
+                    changed = f.read() != data
+            except OSError:
+                pass
+        h = "%s-%s.json" % (prefix, time.strftime("%Y-%m-%d_%H", now))
+        if changed and not os.path.exists(os.path.join(folder, h)):
+            atomic_write(os.path.join(folder, h), data)
+            made.append(h)
+        d = "%s-%s.json" % (prefix, time.strftime("%Y-%m-%d", now))
+        if not os.path.exists(os.path.join(folder, d)):
+            atomic_write(os.path.join(folder, d), data)
+            made.append(d)
+        names = sorted(os.listdir(folder))
+        for pattern, keep in ((hourly, hourly_keep), (daily, daily_keep)):
+            old = [n for n in names if pattern.match(n)]
+            for name in old[:-keep] if keep else old:
+                try:
+                    os.remove(os.path.join(folder, name))
+                except OSError:
+                    pass
+    return made
+
+
+def backup_loop(data_dir, log, keep=30, stop=None, state=None):
+    """Раз в час — резервные копии карты и учётных записей (см. backup_once)."""
     stop = stop or threading.Event()
     while not stop.is_set():
         try:
-            src = os.path.join(data_dir, "state.json")
-            dst = os.path.join(folder, "state-%s.json" % time.strftime("%Y-%m-%d"))
-            if os.path.exists(src) and not os.path.exists(dst):
-                shutil.copyfile(src, dst)
-            old = sorted(n for n in os.listdir(folder) if pattern.match(n))
-            for name in old[:-keep]:
-                os.remove(os.path.join(folder, name))
+            backup_once(data_dir, state, daily_keep=keep)
         except Exception as e:
             log("Не удалось сделать резервную копию: %s" % e)
         stop.wait(3600)
@@ -1388,7 +1491,8 @@ def replace_old(port):
             out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True, timeout=15).stdout
             for line in out.splitlines():
                 parts = line.split()
-                if len(parts) >= 5 and parts[1].endswith(":%d" % port) and parts[3].upper() == "LISTENING":
+                # слово состояния переводится («ПРОСЛУШИВАНИЕ»), поэтому слушающий порт узнаём по пустому удалённому адресу
+                if len(parts) >= 5 and parts[1].endswith(":%d" % port) and parts[2] in ("0.0.0.0:0", "[::]:0", "*:*"):
                     pid = parts[4]
                     name = subprocess.run(["tasklist", "/FI", "PID eq %s" % pid, "/FO", "CSV", "/NH"],
                                           capture_output=True, text=True, timeout=15).stdout.lower()
@@ -1422,7 +1526,7 @@ def make_shortcut(data_dir, log):
     mark = os.path.join(data_dir, "shortcut.done")
     if os.name != "nt" or os.path.exists(mark):
         return
-    shortcut = "Карта сети GPT" if PORT == 8793 else "Карта сети"
+    shortcut = os.path.basename(ROOT) or "Карта сети"
     script = (
         "$d=[Environment]::GetFolderPath('Desktop');"
         "$s=(New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $d %s));"
@@ -1463,7 +1567,7 @@ def main():
     except Exception:
         pass
     ap = argparse.ArgumentParser(description="Карта сети")
-    ap.add_argument("--port", type=int, default=PORT)
+    ap.add_argument("--port", type=int, default=None, help="порт (по умолчанию %d; выбранный запоминается)" % PORT)
     ap.add_argument("--data", help="папка с данными")
     ap.add_argument("--no-window", action="store_true")
     ap.add_argument('--shared', action='store_true', help='совместная работа по IP и порту с входом пользователей')
@@ -1472,7 +1576,7 @@ def main():
     ap.add_argument("--offline-sat", nargs="+", metavar="РАЙОН", help="собрать файл снимков районов (Sentinel-2) в --map-file и выйти")
     ap.add_argument("--map-file", help="куда сохранить офлайн-карту (для --offline-map и --offline-sat)")
     args = ap.parse_args()
-    if not 1 <= args.port <= 65535:
+    if args.port is not None and not 1 <= args.port <= 65535:
         ap.error('Порт должен быть от 1 до 65535')
     sat = args.offline_sat is not None
     if sat:
@@ -1516,11 +1620,18 @@ def main():
         return 1
     with data_lock:
         config_path = os.path.join(data_dir, 'remote-access.json')
+        config = {}
         try:
             with open(config_path, encoding='utf-8') as f:
-                args.shared = args.shared or bool(json.load(f).get('enabled'))
+                config = json.load(f)
+            if not isinstance(config, dict):
+                config = {}
         except (OSError, ValueError):
             pass
+        args.shared = args.shared or bool(config.get('enabled'))
+        if args.port is None:
+            saved = config.get('port')
+            args.port = saved if isinstance(saved, int) and 1 <= saved <= 65535 else PORT
         while True:
             result = serve_desktop(args, data_dir)
             if result != 'restart':
@@ -1540,9 +1651,7 @@ def serve_desktop(args, data_dir):
     restart = [False]
     def save_access(enabled):
         path = os.path.join(data_dir, 'remote-access.json')
-        with open(path + '.tmp', 'w', encoding='utf-8') as f:
-            json.dump(dict(enabled=enabled), f)
-        os.replace(path + '.tmp', path)
+        atomic_write(path, json.dumps(dict(enabled=enabled, port=args.port)))
     def change_access(enabled):
         save_access(enabled)
         args.shared = enabled
@@ -1581,11 +1690,10 @@ def serve_desktop(args, data_dir):
                 open_window(url)
             return 0
     the_app.quit = server.shutdown
-    with open(os.path.join(data_dir, 'desktop-instance.json'), 'w', encoding='utf-8') as f:
-        json.dump(dict(port=args.port, pid=os.getpid()), f)
+    atomic_write(os.path.join(data_dir, 'desktop-instance.json'), json.dumps(dict(port=args.port, pid=os.getpid())))
     save_access(args.shared)
     backup_stop = threading.Event()
-    threading.Thread(target=backup_loop, args=(data_dir, log), kwargs={'stop':backup_stop}, daemon=True).start()
+    threading.Thread(target=backup_loop, args=(data_dir, log), kwargs={'stop': backup_stop, 'state': the_app.state}, daemon=True).start()
     threading.Thread(target=the_app.tilecache.prune, daemon=True).start()
     if not args.no_window and not args.shared:
         threading.Thread(target=make_shortcut, args=(data_dir, log), daemon=True).start()

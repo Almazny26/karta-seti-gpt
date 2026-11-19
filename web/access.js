@@ -39,6 +39,10 @@
         el('p', 'Разрешите входящие подключения к этому порту в брандмауэре Windows. Адрес 127.0.0.1 предназначен только для этого компьютера.', content);
         button('Пользователи и пароли', content).onclick = function () { d.close(); window.KartaShared.showUsers(); };
       }
+      if (window.KartaShared && !window.KartaShared.isOwner()) {
+        el('p', 'Включать и выключать удалённый доступ можно только на серверном компьютере: иначе отключившийся по ошибке администратор не сможет вернуть доступ удалённо.', content).style.color = 'var(--muted,#666)';
+        return;
+      }
       var action = button(state.enabled ? 'Выключить удалённый доступ' : 'Включить удалённый доступ', content);
       if (state.enabled) action.style.background = '#b42318';
       action.onclick = async function () {
@@ -63,9 +67,15 @@
     } catch (error) { content.textContent = error.message; }
   }
   document.addEventListener('DOMContentLoaded', function () {
+    // подписи режимов для узких экранов, где видны только значки
+    document.querySelectorAll('#apBar .ap-seg button').forEach(function (s) { s.title = s.textContent.replace('РедактированиеПравка', 'Редактирование'); s.setAttribute('aria-label', s.title); });
     if (!window.KartaApp || (window.KartaShared && window.KartaShared.user().role !== 'admin')) return;
-    var b = el('button', 'Удалённый доступ', document.getElementById('apBar'));
-    b.id = 'apAccess'; b.title = 'Настройка подключения других пользователей';
+    var b = el('button', '', document.getElementById('apBar'));
+    b.id = 'apAccess'; b.title = 'Удалённый доступ: подключение других пользователей';
+    b.setAttribute('aria-label', 'Удалённый доступ');
+    b.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">' +
+      '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>';
+    el('span', 'Удалённый доступ', b).className = 'ac-label';
     b.style.cssText = 'min-width:0;max-width:25vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:0;border-radius:8px;padding:8px 10px;background:var(--tonal,#eee);color:var(--accent,#007aff);font:inherit;cursor:pointer';
     document.querySelector('#apBar .ap-sp').before(b);
     b.onclick = open;

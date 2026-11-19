@@ -73,7 +73,7 @@ with tempfile.TemporaryDirectory() as folder:
             dialogs = []
             b.on('dialog', lambda dialog: (dialogs.append(dialog.message), dialog.dismiss()))
             b.locator('#apOk').click()
-            assert dialogs and 'Другой пользователь' in dialogs[-1], dialogs
+            assert dialogs and 'Другой пользователь' in dialogs[0], dialogs   # 3.4.6: первый вопрос — оставить чужую версию
             assert app.shared.net()['objs'][id_b]['f']['name'] == 'Правка Ивана'
             # Cancelled conflict must not create an undo entry that restores somebody else's version.
             assert b.evaluate('(id)=>KartaNet.data().objs[id].f.name', id_b) == 'Правка Ивана'
@@ -107,7 +107,7 @@ with tempfile.TemporaryDirectory() as folder:
             admin.evaluate('(id)=>KartaApp.showObject(id)', id_b)
             assert 'Добавил' in admin.locator('#apSheet').inner_text()
             # Authenticated clients must also receive the actual map assets.
-            assert admin.request.get(base + '/tiles/8/159/91.png').status == 200
+            assert admin.request.get(base + '/omap/8/151/90.mvt').status == 200   # офлайн-схема; растровых tiles/ на ПК нет
             admin.evaluate('map.setView([46.64,32.62],14,{animate:false})')
             admin.wait_for_function('window.KartaMap && KartaMap.glMap() && KartaMap.glMap().queryRenderedFeatures().length>0')
             (ROOT / '.audit').mkdir(exist_ok=True)

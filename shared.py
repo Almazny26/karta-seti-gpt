@@ -5,10 +5,53 @@ import hmac
 import json
 import math
 import os
+import re
 import secrets
 import threading
 import time
 from http.cookies import SimpleCookie
+
+MASS_DELETE = 10        # больше удалений за одну правку — только администратор
+SNAPSHOT_OPS = 20       # перед правкой из стольких объектов (или 5+ удалений) — снимок на сервере
+SNAPSHOT_KEEP = 50
+SESSION_IDLE = 12 * 3600
+BACKUP_NAME = re.compile(r'^(state|snapshot)-[0-9A-Za-z_.-]+\.json$')
+
+
+def atomic_write(path, data, attempts=10):
+    """Записать файл целиком через временный файл. На Windows замену может ненадолго
+    заблокировать антивирус, индексатор или копирование: тогда несколько повторов."""
+    if isinstance(data, str):
+        data = data.encode('utf-8')
+    tmp = '%s.%d-%d.tmp' % (path, os.getpid(), threading.get_ident())
+    with open(tmp, 'wb') as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    for attempt in range(attempts):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                raise
+            time.sleep(0.05 * (attempt + 1))
+
+
+def read_json(path, what):
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f)
+    except ValueError as e:
+        raise SystemExit('Файл %s повреждён (%s): %s. Восстановите его из папки backups или удалите.' % (what, path, e))
+
+
+def token_key(token):
+    return hashlib.sha256(token.encode('utf-8')).hexdigest()
 
 
 class SharedError(Exception):
@@ -51,21 +94,80 @@ def password_hash(password, salt):
     return hashlib.pbkdf2_hmac('sha256', password.encode(), bytes.fromhex(salt), 200000).hex()
 
 
+def alive_count(karta_net):
+    try:
+        return sum(1 for o in json.loads(karta_net).get('objs', {}).values() if not o.get('f', {}).get('deleted'))
+    except (ValueError, TypeError, AttributeError):
+        return 0
+
+
+def write_snapshot(folder, state, reason):
+    if not state or not state.get('karta_net'):
+        return None
+    os.makedirs(folder, exist_ok=True)
+    reason = re.sub(r'[^0-9A-Za-z_-]+', '_', reason)[:30] or 'mass'
+    name = 'snapshot-%s-%03d-%s.json' % (time.strftime('%Y-%m-%d_%H-%M-%S'), int(time.time() * 1000) % 1000, reason)
+    atomic_write(os.path.join(folder, name), json.dumps(state, ensure_ascii=False))
+    old = sorted(n for n in os.listdir(folder) if n.startswith('snapshot-') and n.endswith('.json'))
+    for n in old[:-SNAPSHOT_KEEP]:
+        try:
+            os.remove(os.path.join(folder, n))
+        except OSError:
+            pass
+    return name
+
+
 class Shared:
     def __init__(self, state, folder):
         self.state = state
+        self.folder = folder
         self.path = os.path.join(folder, 'shared-users.json')
+        self.sessions_path = os.path.join(folder, 'shared-sessions.json')
         self.lock = threading.RLock()
-        self.sessions = {}
         self.failures = {}
-        self.revision = 0
         if os.path.exists(self.path):
-            with open(self.path, encoding='utf-8') as f:
-                self.users = json.load(f)
+            self.users = read_json(self.path, 'учётных записей')
         else:
             self.users = {}
-            with open(self.path, 'w', encoding='utf-8') as f:
-                json.dump({}, f)
+            atomic_write(self.path, '{}')
+        # Входы переживают перезапуск сервера: в файле только хэши ключей, не сами ключи.
+        self.sessions = {}
+        if os.path.exists(self.sessions_path):
+            try:
+                with open(self.sessions_path, encoding='utf-8') as f:
+                    saved = json.load(f)
+                now = time.time()
+                self.sessions = {k: v for k, v in saved.items()
+                                 if isinstance(v, dict) and v.get('login') in self.users and now - v.get('seen', 0) < SESSION_IDLE}
+            except (OSError, ValueError, AttributeError):
+                self.sessions = {}
+        # Номер версии растёт и после перезапуска (иначе открытые окна перестают видеть правки).
+        stored = 0
+        try:
+            stored = int((self.state.load() or {}).get('_shared_rev', 0))
+        except (ValueError, TypeError, OSError):
+            stored = 0
+        self.revision = max(int(time.time() * 1000), stored + 1)
+
+    def _save_sessions(self):
+        now = time.time()
+        for key in [k for k, v in self.sessions.items() if now - v['seen'] > SESSION_IDLE]:
+            del self.sessions[key]
+        for v in self.sessions.values():
+            v['saved'] = v['seen']
+        try:
+            atomic_write(self.sessions_path, json.dumps(self.sessions, ensure_ascii=False))
+        except OSError:
+            pass
+
+    def bump(self):
+        self.revision = max(self.revision + 1, int(time.time() * 1000))
+        return self.revision
+
+    def logout(self, key):
+        with self.lock:
+            if self.sessions.pop(key, None) is not None:
+                self._save_sessions()
 
     def set_user(self, data, local_owner=False):
         if not isinstance(data, dict):
@@ -78,6 +180,8 @@ class Shared:
                 raise SharedError(400, 'Укажите логин, имя и роль')
             users = copy.deepcopy(self.users)
             old = users.get(login, {})
+            if data.get('create') and old:
+                raise SharedError(409, 'Логин «%s» уже занят. Выберите другой или измените существующего пользователя.' % login)
             if data.get('disable'):
                 users.pop(login, None)
             else:
@@ -91,29 +195,40 @@ class Shared:
                 users[login] = user
             if not local_owner and any(u['role'] == 'admin' for u in self.users.values()) and not any(u['role'] == 'admin' for u in users.values()):
                 raise SharedError(400, 'Нужно сохранить хотя бы одного администратора')
-            tmp = self.path + '.tmp'
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(users, f, ensure_ascii=False)
-            os.replace(tmp, self.path)
+            atomic_write(self.path, json.dumps(users, ensure_ascii=False))
             self.users = users
+            changed = False
             for token, session in list(self.sessions.items()):
                 if session['login'] == login:
                     del self.sessions[token]
+                    changed = True
+            if changed:
+                self._save_sessions()
 
     def login(self, data, ip):
         if not isinstance(data, dict):
             raise SharedError(400, 'Неверные данные входа')
         with self.lock:
+            now = time.time()
+            for key in [k for k, v in self.failures.items() if now - v[1] > 60]:
+                del self.failures[key]
             count, ts = self.failures.get(ip, (0, 0))
-            if count >= 5 and time.time() - ts < 60:
+            if count >= 5 and now - ts < 60:
                 raise SharedError(429, 'Повторите вход через минуту')
             user = self.users.get(str(data.get('login', '')).strip().lower())
-            if not user or not hmac.compare_digest(user['hash'], password_hash(str(data.get('password', '')), user['salt'])):
+            user = dict(user) if user else None
+        # PBKDF2 считается без общей блокировки: вход одного не тормозит работу остальных
+        password = str(data.get('password', ''))[:1024]
+        ok = bool(user) and hmac.compare_digest(user['hash'], password_hash(password, user['salt']))
+        with self.lock:
+            if not ok or self.users.get(user['login'], {}).get('hash') != user['hash']:
+                count, ts = self.failures.get(ip, (0, 0))
                 self.failures[ip] = (count + 1 if time.time() - ts < 60 else 1, time.time())
                 raise SharedError(401, 'Неверный логин или пароль')
             self.failures.pop(ip, None)
             token = secrets.token_urlsafe(32)
-            self.sessions[token] = dict(login=user['login'], ip=ip, seen=time.time(), since=time.time())
+            self.sessions[token_key(token)] = dict(login=user['login'], ip=ip, seen=time.time(), since=time.time())
+            self._save_sessions()
             return token
 
     def identify(self, cookie):
@@ -123,13 +238,17 @@ class Shared:
             token = cookies['karta_session'].value
         except (KeyError, ValueError):
             raise SharedError(401, 'Войдите в программу')
+        key = token_key(token)
         with self.lock:
-            session = self.sessions.get(token)
-            if not session or time.time() - session['seen'] > 12 * 3600 or session['login'] not in self.users:
-                self.sessions.pop(token, None)
+            session = self.sessions.get(key)
+            if not session or time.time() - session['seen'] > SESSION_IDLE or session['login'] not in self.users:
+                if self.sessions.pop(key, None) is not None:
+                    self._save_sessions()
                 raise SharedError(401, 'Войдите в программу')
             session['seen'] = time.time()
-            return self.public(self.users[session['login']]), token
+            if session['seen'] - session.get('saved', 0) > 300:
+                self._save_sessions()
+            return self.public(self.users[session['login']]), key
 
     @staticmethod
     def public(user):
@@ -149,6 +268,8 @@ class Shared:
             local = getattr(self, 'local_presence', None)
             if local and time.time() - local[1] < 15:
                 result['online'].insert(0, dict(local[0], ip='127.0.0.1'))
+            if not user or user.get('role') != 'admin':
+                result['online'] = [{k: v for k, v in u.items() if k != 'ip'} for u in result['online']]
             if revision != str(self.revision):
                 result['net'] = self.net()
             return result
@@ -164,6 +285,8 @@ class Shared:
         if not isinstance(points, list) or (obj['type'] != 'node' and len(points) < 2):
             raise SharedError(400, 'У линии должно быть не меньше двух точек')
         for p in points:
+            if isinstance(p, dict) and obj['type'] != 'node' and not isinstance(p.get('nid', ''), str):
+                raise SharedError(400, 'Неверная ссылка на узел')
             if not isinstance(p, dict) or any(not isinstance(p.get(k), (int, float)) or not math.isfinite(p[k]) or abs(p[k]) > limit for k, limit in [('lat', 90), ('lng', 180)]):
                 raise SharedError(400, 'Неверные координаты')
         if obj['type'] == 'radio' and len(points) != 2:
@@ -194,6 +317,12 @@ class Shared:
                     self.validate(op['after'], id)
             if conflicts:
                 return dict(conflicts=conflicts, **self.snapshot(user)), 409
+            deletions = sum(1 for op in ops if (net['objs'].get(op['id']) and not net['objs'][op['id']]['f'].get('deleted'))
+                            and (op.get('after') is None or op['after']['f'].get('deleted')))
+            if deletions > MASS_DELETE and user['role'] != 'admin':
+                raise SharedError(403, 'Удалить сразу больше %d объектов (замена или откат карты) может только администратор' % MASS_DELETE)
+            if len(ops) >= SNAPSHOT_OPS or deletions >= 5 or data.get('reason'):
+                self.make_snapshot(str(data.get('reason') or 'mass'))
             now = int(time.time() * 1000)
             for op in ops:
                 id, old, obj = op['id'], net['objs'].get(op['id']), copy.deepcopy(op.get('after'))
@@ -251,7 +380,60 @@ class Shared:
             net['journal'] = net.get('journal', [])[:1000]
             state = self.state.load() or {}
             state['karta_net'] = json.dumps(net, ensure_ascii=False)
-            self.state.save(state)
             if ops:
-                self.revision += 1
+                state['_shared_rev'] = str(self.bump())
+            self.state.save(state)
             return self.snapshot(user), 200
+
+    # --- снимки и восстановление (только администратор)
+
+    def backups_dir(self):
+        return os.path.join(self.folder, 'backups')
+
+    def make_snapshot(self, reason):
+        """Копия общей карты перед массовой правкой: backups/snapshot-<время>-<причина>.json."""
+        return write_snapshot(self.backups_dir(), self.state.load(), reason)
+
+    def list_backups(self):
+        folder = self.backups_dir()
+        try:
+            names = [n for n in os.listdir(folder) if BACKUP_NAME.match(n)]
+        except OSError:
+            names = []
+        out = []
+        for n in names:
+            full = os.path.join(folder, n)
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
+            out.append(dict(name=n, size=st.st_size, mtime=int(st.st_mtime * 1000),
+                            kind='снимок перед массовой правкой' if n.startswith('snapshot-') else 'плановая копия'))
+        out.sort(key=lambda b: b['mtime'], reverse=True)
+        return out[:200]
+
+    def restore(self, user, name):
+        if user['role'] != 'admin':
+            raise SharedError(403, 'Восстанавливать карту может только администратор')
+        if not isinstance(name, str) or not BACKUP_NAME.match(name):
+            raise SharedError(400, 'Неверное имя копии')
+        path = os.path.join(self.backups_dir(), name)
+        try:
+            with open(path, encoding='utf-8') as f:
+                backup = json.loads(json.load(f)['karta_net'])
+            if not isinstance(backup, dict) or not isinstance(backup.get('objs'), dict):
+                raise ValueError
+        except (OSError, ValueError, KeyError, TypeError):
+            raise SharedError(400, 'Копия повреждена или не найдена')
+        with self.lock:
+            self.make_snapshot('before-restore')
+            net = self.net()
+            now = int(time.time() * 1000)
+            restored = dict(net, objs=backup['objs'])
+            restored['journal'] = ([dict(t=now, by=user['name'], byId=user['login'], id='', type='', name=name,
+                                         what='карта восстановлена из копии')] + net.get('journal', []))[:1000]
+            state = self.state.load() or {}
+            state['karta_net'] = json.dumps(restored, ensure_ascii=False)
+            state['_shared_rev'] = str(self.bump())
+            self.state.save(state)
+            return self.snapshot(user)
