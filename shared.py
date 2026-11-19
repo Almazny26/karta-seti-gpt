@@ -363,6 +363,10 @@ class Shared:
             raise SharedError(400, 'Радиолиния соединяет две точки')
         if obj['type'] == 'fiber' and (not isinstance(f.get('lay'), list) or len(f['lay']) != len(points)-1 or any(k not in ('air','ground','surface','air_guess','ground_guess') for k in f['lay'])):
             raise SharedError(400, 'Неверные участки ВОЛС')
+        fib = f.get('fibers')   # число жил: необязательно; старые файлы — строкой свободного вида
+        if fib is not None and (isinstance(fib, bool) or not isinstance(fib, (str, int)) or len(str(fib)) > 40
+                                or (isinstance(fib, int) and not 0 <= fib <= 10000)):
+            raise SharedError(400, 'Неверное число жил')
 
     def apply(self, user, data):
         if user['role'] == 'viewer':

@@ -29,19 +29,25 @@
 
   // ================================================================== справочники
 
-  var NODE_KINDS = ['узел доступа', 'узел агрегации', 'опорный узел', 'базовая станция', 'коммутатор', 'клиент', 'другое'];
+  var NODE_KINDS = ['узел доступа', 'узел агрегации', 'опорный узел', 'коммутатор', 'базовая станция', 'точка доступа Wi-Fi', 'шкаф', 'клиент', 'другое'];
+  /* число жил кабеля ВОЛС: быстрый выбор; последнее выбранное — по умолчанию для следующей линии */
+  var FIBERS = ['1', '2', '4', '6', '8', '16', '32', '64', '96', '144'], FIB_KEY = 'karta_fibers';
+  function lastFibers() { try { var v = localStorage.getItem(FIB_KEY); return FIBERS.indexOf(v) >= 0 ? v : ''; } catch (e) { return ''; } }
+  function fibLabel(v) { return v ? String(v) + ' ж' : ''; }
   var SHAPE = {
     'узел доступа': '<circle cx="12" cy="12" r="8"/>',
     'узел агрегации': '<rect x="4.5" y="4.5" width="15" height="15" rx="2"/>',
     'опорный узел': '<path d="M12 2.2 21.8 12 12 21.8 2.2 12Z"/>',
-    'базовая станция': '<path d="M12 2.6 21.6 19.6H2.4Z"/>',
-    'коммутатор': '<rect x="2.4" y="6.8" width="19.2" height="10.4" rx="2"/>',
+    'базовая станция': '<path d="M12 2.6 21.6 19.6H2.4Z"/><path d="M12 9v7" stroke-width="1.8"/>',
+    'коммутатор': '<rect x="2.4" y="6.8" width="19.2" height="10.4" rx="2"/><path d="M6 12h12M9 9.6v4.8M15 9.6v4.8" stroke-width="1.6"/>',
+    'точка доступа Wi-Fi': '<path d="M12 4.2 20.8 19.4H3.2Z"/><circle cx="12" cy="14.6" r="1.6" fill="#fff" stroke="none"/>',
+    'шкаф': '<rect x="5" y="3" width="14" height="18" rx="1.6"/><path d="M12 6v12" stroke-width="1.6"/>',
     'клиент': '<circle cx="12" cy="12" r="5.2"/>',
     'другое': '<path d="M12 2.6 20.2 7.3V16.7L12 21.4 3.8 16.7V7.3Z"/>'
   };
   var STATES = { 'работает': '#2e7d32', 'авария': '#c62828', 'работы': '#ef6c00', 'план': '#78909c' };
-  var PT_KINDS = ['опора', 'колодец', 'муфта', 'кросс', 'точка'];
-  var PT_COLOR = { 'опора': '#5d4037', 'колодец': '#455a64', 'муфта': '#ef6c00', 'кросс': '#2e7d32', 'точка': '#78909c', 'узел': '#1565c0' };
+  var PT_KINDS = ['опора', 'колодец', 'муфта', 'кросс', 'запас', 'точка'];
+  var PT_COLOR = { 'опора': '#5d4037', 'колодец': '#455a64', 'муфта': '#ef6c00', 'кросс': '#2e7d32', 'запас': '#00838f', 'точка': '#78909c', 'узел': '#1565c0' };
   var LAY = {
     air: { name: 'по опорам', color: '#e8590c', dash: null },
     ground: { name: 'в земле', color: '#6d4c41', dash: '10 8' },
@@ -52,13 +58,14 @@
   var LAY_KEYS = Object.keys(LAY);
   function pointKind(lay) { return lay === 'air' ? 'опора' : lay === 'ground' ? 'колодец' : 'точка'; }
   /* значки точек линии: по виду их можно отличить не вглядываясь */
-  var PT_PX = { 'опора': 18, 'колодец': 20, 'муфта': 24, 'кросс': 22, 'точка': 13, 'узел': 13 };
+  var PT_PX = { 'опора': 18, 'колодец': 20, 'муфта': 24, 'кросс': 22, 'запас': 18, 'точка': 13, 'узел': 13 };
   function ptSvg(kind, px, ring) {
     var c = PT_COLOR[kind] || PT_COLOR['точка'], st = ' fill="' + c + '" stroke="#fff" stroke-width="2.2" stroke-linejoin="round"', w = ' fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round"', g;
     if (kind === 'опора') g = '<circle cx="12" cy="12" r="7.5"' + st + '/><circle cx="12" cy="12" r="2" fill="#fff"/>';
     else if (kind === 'колодец') g = '<rect x="3.5" y="3.5" width="17" height="17" rx="3"' + st + '/><circle cx="12" cy="12" r="4"' + w + '/>';
     else if (kind === 'муфта') g = '<path d="M12 1.8 22.2 12 12 22.2 1.8 12Z"' + st + '/><path d="M7.5 12h9"' + w + '/>';
     else if (kind === 'кросс') g = '<rect x="3" y="3" width="18" height="18" rx="2.5"' + st + '/><path d="M8 8l8 8M16 8l-8 8"' + w + '/>';
+    else if (kind === 'запас') g = '<circle cx="12" cy="12" r="8"' + st + '/><path d="M15.5 12a3.5 3.5 0 1 1-1.2-2.6"' + w + '/>';
     else g = '<circle cx="12" cy="12" r="6.5"' + st + '/>';
     return '<svg class="ap-pt' + (ring ? ' ring' : '') + '" width="' + px + '" height="' + px + '" viewBox="0 0 24 24">' + g + '</svg>';
   }
@@ -87,8 +94,29 @@
 
   function empty() { return { v: 1, objs: {}, journal: [] }; }
   function valid(d) { return !!(d && typeof d === 'object' && d.objs && typeof d.objs === 'object'); }
+  /* Большая сеть (тысячи узлов и линий) не помещается в память браузера (localStorage — около
+   * 5 млн знаков). На телефоне карта хранится файлом через оболочку (KartaFiles.netSave/netLoad),
+   * в браузере остаётся копия, пока она небольшая (её видит и прежняя версия приложения). */
+  var bigStore = android && typeof android.netSave === 'function' && typeof android.netLoad === 'function' ? android : null;
+  var SMALL = 2000000;
+  function readStore(key) {
+    var s = null;
+    if (bigStore) { try { s = bigStore.netLoad(key === KEY ? 'net' : 'prev'); } catch (e) { s = null; } }
+    if (!s) { try { s = localStorage.getItem(key); } catch (e) { s = null; } }
+    return s || null;
+  }
+  function writeStore(key, s) {
+    if (bigStore) {
+      var ok = false;
+      try { ok = bigStore.netSave(key === KEY ? 'net' : 'prev', s == null ? null : s) !== false; } catch (e) { ok = false; }
+      try { if (s != null && s.length < SMALL) localStorage.setItem(key, s); else localStorage.removeItem(key); } catch (e) { if (!ok) throw e; }
+      if (!ok) throw Error('Не удалось записать файл карты');
+      return;
+    }
+    if (s == null) localStorage.removeItem(key); else localStorage.setItem(key, s);
+  }
   function load() {
-    try { var d = JSON.parse(localStorage.getItem(KEY)); if (valid(d)) { if (!Array.isArray(d.journal)) d.journal = []; return d; } } catch (e) { /* пусто */ }
+    try { var d = JSON.parse(readStore(KEY)); if (valid(d)) { if (!Array.isArray(d.journal)) d.journal = []; return d; } } catch (e) { /* пусто */ }
     return empty();
   }
   var shared = window.KartaShared || null;
@@ -98,9 +126,35 @@
     return;
   }
   var db = shared ? copy(shared.initial) : load(), sharedLast = shared ? copy(db) : null, sharedUndo = [];
-  /* «Отменить»: перед каждой серией правок (паузы меньше четверти секунды — одна серия) запоминается прежняя сеть */
-  var undoStack = [], lastJson = JSON.stringify(db.objs), lastPush = 0;
+  /* «Отменить»: перед каждой серией правок (паузы меньше четверти секунды — одна серия) запоминаются
+   * прежние версии изменённых объектов (а не вся сеть: на большой сети это сотни мегабайт памяти).
+   * Записанный текст каждого объекта хранится, поэтому сохранение после правки переводит в текст
+   * только изменённые объекты. */
+  var undoStack = [], lastPush = 0, objStr = {}, objRef = {}, dirty = null;
+  function serialize(initial) {
+    var ids = Object.keys(db.objs), changes = {}, n = 0, parts = new Array(ids.length);
+    ids.forEach(function (id, i) {
+      var o = db.objs[id];
+      if (dirty === null || dirty[id] || objRef[id] !== o) {
+        var str = JSON.stringify(o);
+        if (str !== objStr[id]) { changes[id] = objStr[id] === undefined ? null : objStr[id]; n++; }
+        objStr[id] = str; objRef[id] = o;
+      }
+      parts[i] = JSON.stringify(id) + ':' + objStr[id];
+    });
+    Object.keys(objStr).forEach(function (id) {
+      if (!(id in db.objs)) { changes[id] = objStr[id]; n++; delete objStr[id]; delete objRef[id]; }
+    });
+    dirty = {};
+    var head = {};
+    Object.keys(db).forEach(function (k) { if (k !== 'objs') head[k] = db[k]; });
+    var h = JSON.stringify(head);
+    return { text: h.slice(0, -1) + (h.length > 2 ? ',' : '') + '"objs":{' + parts.join(',') + '}}', changes: initial ? {} : changes, n: initial ? 0 : n };
+  }
+  function touch(id) { if (dirty) dirty[id] = 1; }
+  if (!shared) serialize(true);
   function save() {
+    index = null;
     if (shared) {
       var prior = copy(sharedLast), attempted = copy(db);
       db = shared.commit(db);
@@ -112,16 +166,18 @@
         if (changes.length && shared.wasAccepted()) { sharedUndo.push(changes); if (sharedUndo.length > 30) sharedUndo.shift(); }
         sharedLast = copy(db);
       }
-      try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { /* сервер хранит основную копию */ }
+      try { var sj = JSON.stringify(db); if (sj.length < SMALL) localStorage.setItem(KEY, sj); else localStorage.removeItem(KEY); } catch (e) { /* сервер хранит основную копию */ }
       document.body.classList.toggle('ap-canundo', sharedUndo.length > 0);
       return;
     }
-    var now = Date.now(), cur = JSON.stringify(db.objs);
-    if (cur !== lastJson) {
-      if (now - lastPush > 250) { undoStack.push(lastJson); if (undoStack.length > 30) undoStack.shift(); }
-      lastPush = now; lastJson = cur;
+    var now = Date.now(), r = serialize();
+    if (r.n) {
+      var top = undoStack[undoStack.length - 1];
+      if (top && now - lastPush <= 250) Object.keys(r.changes).forEach(function (id) { if (!(id in top)) top[id] = r.changes[id]; });
+      else { undoStack.push(r.changes); if (undoStack.length > 30) undoStack.shift(); }
+      lastPush = now;
     }
-    try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast('Не удалось сохранить: память заполнена'); }
+    try { writeStore(KEY, r.text); } catch (e) { toast('Не удалось сохранить: память заполнена'); }
     document.body.classList.toggle('ap-canundo', undoStack.length > 0);
   }
   function undo() {
@@ -137,10 +193,11 @@
       return;
     }
     if (!undoStack.length || tool || mode !== 'edit') return;
-    db.objs = JSON.parse(undoStack.pop());
-    lastJson = JSON.stringify(db.objs); lastPush = 0;
+    var back = undoStack.pop();
+    Object.keys(back).forEach(function (id) { if (back[id] == null) delete db.objs[id]; else db.objs[id] = JSON.parse(back[id]); });
+    lastPush = 0;
     db.journal.unshift({ t: Date.now(), by: author(), id: '', type: '', name: 'Отмена', what: 'последнее изменение отменено' });
-    try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { /* уже сообщали */ }
+    try { writeStore(KEY, serialize(true).text); } catch (e) { /* уже сообщали */ }
     document.body.classList.toggle('ap-canundo', undoStack.length > 0);
     sel = null; if (view && view.k !== 'search') closeSheet();
     refresh();
@@ -171,6 +228,7 @@
     if (!changed && !isNew) return o;
     if (previousRoute && previousRoute !== routeRevision(o)) rememberRoutes(o, [previousRoute]);
     o.t = now; o.by = author();
+    touch(o.id);
     log(o, what || (isNew ? 'добавлен' : 'изменён'));
     save();
     if (!quiet) refresh();
@@ -456,7 +514,7 @@
     '.ap-shape.ring{filter:drop-shadow(0 0 0 #fff) drop-shadow(0 0 5px var(--accent)) drop-shadow(0 0 3px var(--accent))}',
     '.ap-lbl{position:absolute;left:50%;top:100%;transform:translateX(-50%);margin-top:2px;white-space:nowrap;font:600 11px/1.2 var(--font);' +
       'color:#1a1a1a;text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 3px #fff;pointer-events:none}',
-    '.ap-z-lo .ap-lbl,.ap-z-lo2 .ap-llbl{display:none}',
+    '.ap-z-lo .ap-lbl,.ap-z-lo2 .ap-llbl,.ap-lbl-off .ap-lbl{display:none}',
     '.ap-llbl{position:absolute;transform:translate(-50%,-50%);white-space:nowrap;font:600 11px/1.3 var(--font);padding:1px 7px;border-radius:9px;' +
       'background:#fff;color:#b23c00;border:1px solid #e8590c;pointer-events:none}',
     '.ap-llbl.radio{color:#1565c0;border-color:#1565c0}',
@@ -552,6 +610,11 @@
   toastEl.id = 'apToast';
   document.body.appendChild(toastEl);
   var toastT = 0;
+  /* короткий отклик пальцу при постановке точки или узла (настройка «Вибрация») */
+  function buzz() {
+    if (!S.vibro) return;
+    try { if (android && android.tick) android.tick(); else if (navigator.vibrate) navigator.vibrate(12); } catch (e) { /* нет */ }
+  }
   function toast(msg) {
     toastEl.textContent = msg;
     toastEl.classList.add('show');
@@ -785,6 +848,10 @@
   // ================================================================== отрисовка
 
   var layer = L.layerGroup().addTo(map), ptsLayer = L.layerGroup().addTo(map), toolLayer = L.layerGroup().addTo(map);
+  /* Линии, точки линий и узлы на мелком масштабе рисуются на одном холсте (canvas): тысячи объектов
+   * не превращаются в тысячи элементов страницы, карта двигается плавно и на телефоне. Узлы рядом
+   * (на экране их немного) — значками SVG с подписями; подписи, которые налезают друг на друга, скрыты. */
+  var canvas = L.canvas({ padding: 0.35, tolerance: pc ? 3 : 8 });
   var sel = null;          // {type: 'node'|'line', id}
   var tool = null;         // инструмент нанесения
   var lastDrag = 0, lastLong = 0;
@@ -794,14 +861,45 @@
     c.classList.toggle('ap-z-lo', S.nodeLbl === 'never' || (S.nodeLbl === 'zoom' && z < 12));
     c.classList.toggle('ap-z-lo2', S.lineLbl === 'never' || (S.lineLbl === 'zoom' && z < 13));
   }
-  // Leaflet сам перемещает существующие линии и маркеры при масштабе.
-  // Полная пересборка здесь вызывала мигание и лишнюю работу после каждого жеста.
   map.on('zoomend', zoomCls);
   zoomCls();
 
+  /* значок на холсте: форма по виду объекта, белая обводка, метка внутри */
+  var KShape = L.CircleMarker.extend({
+    _updatePath: function () {
+      var r = this._renderer;
+      if (!r._drawing || this._empty()) return;
+      var p = this._point, ctx = r._ctx, s = this._radius, k = this.options.shape, x = p.x, y = p.y, i;
+      ctx.beginPath();
+      if (k === 'square') ctx.rect(x - s, y - s, 2 * s, 2 * s);
+      else if (k === 'diamond') { ctx.moveTo(x, y - s * 1.3); ctx.lineTo(x + s * 1.3, y); ctx.lineTo(x, y + s * 1.3); ctx.lineTo(x - s * 1.3, y); ctx.closePath(); }
+      else if (k === 'triangle') { ctx.moveTo(x, y - s * 1.35); ctx.lineTo(x + s * 1.25, y + s * 0.9); ctx.lineTo(x - s * 1.25, y + s * 0.9); ctx.closePath(); }
+      else if (k === 'rect') ctx.rect(x - s * 1.4, y - s * 0.75, s * 2.8, s * 1.5);
+      else if (k === 'hex') { for (i = 0; i < 6; i++) { var a = Math.PI / 3 * i + Math.PI / 6; ctx[i ? 'lineTo' : 'moveTo'](x + s * 1.15 * Math.cos(a), y + s * 1.15 * Math.sin(a)); } ctx.closePath(); }
+      else ctx.arc(x, y, s, 0, Math.PI * 2);
+      r._fillStroke(ctx, this);
+      var m = this.options.mark;
+      if (!m || s < 4) return;
+      ctx.beginPath();
+      ctx.strokeStyle = '#fff'; ctx.fillStyle = '#fff'; ctx.lineWidth = Math.max(1.2, s / 4); ctx.lineCap = 'round'; ctx.globalAlpha = 1;
+      if (m === 'dot') { ctx.arc(x, y, Math.max(1.2, s / 3.6), 0, Math.PI * 2); ctx.fill(); }
+      else if (m === 'ring') { ctx.arc(x, y, s * 0.5, 0, Math.PI * 2); ctx.stroke(); }
+      else if (m === 'bar') { ctx.moveTo(x - s * 0.6, y); ctx.lineTo(x + s * 0.6, y); ctx.stroke(); }
+      else if (m === 'x') { ctx.moveTo(x - s * .5, y - s * .5); ctx.lineTo(x + s * .5, y + s * .5); ctx.moveTo(x + s * .5, y - s * .5); ctx.lineTo(x - s * .5, y + s * .5); ctx.stroke(); }
+      else if (m === 'loop') { ctx.arc(x, y, s * 0.45, 0, Math.PI * 1.6); ctx.stroke(); }
+    }
+  });
+  var PT_SHAPE = { 'опора': ['circle', 'dot'], 'колодец': ['square', 'ring'], 'муфта': ['diamond', 'bar'], 'кросс': ['square', 'x'], 'запас': ['circle', 'loop'], 'точка': ['circle', null], 'узел': ['circle', null] };
+  var NODE_SHAPE = { 'узел доступа': 'circle', 'узел агрегации': 'square', 'опорный узел': 'diamond', 'базовая станция': 'triangle', 'коммутатор': 'rect', 'клиент': 'circle', 'шкаф': 'square', 'точка доступа Wi-Fi': 'triangle', 'другое': 'hex' };
+  function zf(z) { return z >= 17 ? 1.2 : z >= 15 ? 1 : z >= 13 ? 0.85 : z >= 11 ? 0.7 : 0.55; }   // размер значков от масштаба
+  function shapeAt(ll, kind, color, r, mark, opts) {
+    return new KShape(ll, L.extend({ renderer: canvas, radius: r, shape: kind, mark: mark, color: '#fff', weight: Math.max(1.3, r / 3.5), opacity: 1,
+      fillColor: color, fillOpacity: 1, interactive: false }, opts || {}));
+  }
+
   function nodeIcon(o, ring) {
-    var color = STATES[o.f.state] || '#455a64', big = o.f.kind === 'опорный узел' || o.f.kind === 'базовая станция', px = Math.round((big ? 28 : 24) * S.nodeSize);
-    return L.divIcon({ className: '', html: shapeSvg(o.f.kind, color, px, ring) + '<div class="ap-lbl">' + esc(o.f.name) + '</div>',
+    var color = STATES[o.f.state] || '#455a64', big = o.f.kind === 'опорный узел' || o.f.kind === 'базовая станция' || o.f.kind === 'коммутатор', px = Math.round((big ? 28 : 24) * S.nodeSize * Math.max(0.8, zf(map.getZoom())));
+    return L.divIcon({ className: 'ap-nd', html: shapeSvg(o.f.kind, color, px, ring) + '<div class="ap-lbl">' + esc(o.f.name) + '</div>',
       iconSize: [px, px], iconAnchor: [px / 2, px / 2] });
   }
   function handleIcon(p, type) {
@@ -811,98 +909,171 @@
   /* с какого масштаба видна точка линии: муфты и кроссы — раньше опор и колодцев */
   function ptShown(kind, z) {
     var base = S.linePts === 'always' ? 12 : S.linePts === 'never' ? 99 : 14;
-    return z >= (kind === 'муфта' || kind === 'кросс' ? base - 2 : base);
+    return z >= (kind === 'муфта' || kind === 'кросс' || kind === 'запас' ? base - 2 : base);
   }
-  var pointMarkers = {};
+
+  // --------------------------------------------------------------- что видно на экране (после движения)
+
+  var pointMarkers = {}, nodeMarkers = {}, lineLabels = {}, gen = 0;
+  function view2() { return map.getBounds().pad(0.3); }
   function drawPoints() {
     var keep = {};
-    var z = map.getZoom(), b = map.getBounds().pad(0.25), lblZ = S.ptLbl === 'always' ? 14 : S.ptLbl === 'never' ? 99 : 16, n = 0;
+    var z = map.getZoom(), b = view2(), lblZ = S.ptLbl === 'always' ? 14 : S.ptLbl === 'never' ? 99 : 16, n = 0, f = zf(z);
     alive().forEach(function (o) {
       if (o.type !== 'fiber') return;
       if (sel && sel.type === 'line' && sel.id === o.id && mode === 'edit' && !tool) return;      // у выделенной линии — ручки
       ptsOf(o).forEach(function (p, i) {
-        if (p.nid || n > 1500 || !ptShown(p.kind, z) || !b.contains([p.lat, p.lng])) return;
+        if (p.nid || n > 12000 || !ptShown(p.kind, z) || !b.contains([p.lat, p.lng])) return;
         n++;
-        var px = Math.round((PT_PX[p.kind] || 12) * S.ptSize);
-        var key = o.id + ':' + i, html = ptSvg(p.kind, px) + (p.name && z >= lblZ ? '<div class="ap-plbl">' + esc(p.name) + '</div>' : '');
-        var old = pointMarkers[key], order = p.kind === 'муфта' || p.kind === 'кросс' ? 350 : 300;
-        if (!old) {
-          old = pointMarkers[key] = { marker: L.marker([p.lat, p.lng], { interactive: false, keyboard: false,
-            zIndexOffset: order, icon: L.divIcon({ className: '', html: html, iconSize: [px, px], iconAnchor: [px / 2, px / 2] }) }).addTo(ptsLayer) };
-        } else {
-          var ll = old.marker.getLatLng();
-          if (ll.lat !== p.lat || ll.lng !== p.lng) old.marker.setLatLng([p.lat, p.lng]);
-          if (old.html !== html || old.px !== px) old.marker.setIcon(L.divIcon({ className: '', html: html, iconSize: [px, px], iconAnchor: [px / 2, px / 2] }));
-          if (old.order !== order) old.marker.setZIndexOffset(order);
-        }
-        old.html = html; old.px = px; old.order = order;
+        var key = o.id + ':' + i, st = PT_SHAPE[p.kind] || PT_SHAPE['точка'], r = Math.max(3, (PT_PX[p.kind] || 12) / 2.6 * S.ptSize * f);
+        var sig = p.lat + ',' + p.lng + ',' + p.kind + ',' + r + ',' + (z >= lblZ ? p.name || '' : '');
+        var old = pointMarkers[key];
+        if (old && old.sig === sig) { keep[key] = true; return; }
+        if (old) { ptsLayer.removeLayer(old.m); if (old.l) ptsLayer.removeLayer(old.l); }
+        var m = shapeAt([p.lat, p.lng], st[0], PT_COLOR[p.kind] || PT_COLOR['точка'], r, st[1]).addTo(ptsLayer), l = null;
+        if (p.name && z >= lblZ) l = L.marker([p.lat, p.lng], { interactive: false, keyboard: false, icon: L.divIcon({ className: '', html: '<div class="ap-plbl">' + esc(p.name) + '</div>', iconSize: [0, 0], iconAnchor: [0, -r] }) }).addTo(ptsLayer);
+        pointMarkers[key] = { m: m, l: l, sig: sig };
         keep[key] = true;
       });
     });
     Object.keys(pointMarkers).forEach(function (key) {
-      if (!keep[key]) { ptsLayer.removeLayer(pointMarkers[key].marker); delete pointMarkers[key]; }
+      if (!keep[key]) { var o = pointMarkers[key]; ptsLayer.removeLayer(o.m); if (o.l) ptsLayer.removeLayer(o.l); delete pointMarkers[key]; }
     });
   }
-  map.on('moveend', drawPoints);
+  /* Узлы: если на экране их немного — значки SVG с подписями и перетаскиванием выделенного,
+   * если много (мелкий масштаб) — фигуры на холсте. Выделенный узел — всегда значок. */
+  function drawNodes() {
+    var z = map.getZoom(), b = view2(), vis = [], keep = {};
+    alive().forEach(function (o) {
+      if (o.type !== 'node' || !isFinite(o.f.lat) || !isFinite(o.f.lng)) return;
+      var isSel = sel && sel.type === 'node' && sel.id === o.id;
+      if (isSel || b.contains([o.f.lat, o.f.lng])) vis.push(o);
+    });
+    var dom = vis.length <= (pc ? 600 : 300), f = zf(z);
+    vis.forEach(function (o) {
+      var isSel = sel && sel.type === 'node' && sel.id === o.id, asDom = dom || isSel;
+      var sig = [o.t, o.f.lat, o.f.lng, o.f.name, o.f.kind, o.f.state, asDom ? 'd' : 'c', isSel ? 's' : '', mode, tool ? 't' : '', S.nodeSize, f, gen].join('|');
+      keep[o.id] = true;
+      var old = nodeMarkers[o.id];
+      if (old && old.sig === sig) return;
+      if (old) layer.removeLayer(old.m);
+      var m;
+      if (asDom) {
+        m = L.marker([o.f.lat, o.f.lng], { icon: nodeIcon(o, isSel), draggable: mode === 'edit' && isSel && !tool, bubblingMouseEvents: true, keyboard: false, zIndexOffset: isSel ? 900 : 500 });
+        if (pc && mode === 'view') m.bindTooltip(esc(o.f.name || '') + (o.f.kind ? ' · ' + esc(o.f.kind) : ''), { direction: 'top', offset: [0, -12] });
+        m.on('dragend', function () {
+          lastDrag = Date.now();
+          var ll = m.getLatLng();
+          put(o.id, 'node', { lat: +ll.lat.toFixed(6), lng: +ll.lng.toFixed(6) }, 'перемещён', true);
+          var n = follow(o.id);
+          toast('Узел перемещён' + (n ? ', линий за ним: ' + n : ''));
+        });
+      } else {
+        var big = o.f.kind === 'опорный узел' || o.f.kind === 'базовая станция' || o.f.kind === 'коммутатор';
+        m = shapeAt([o.f.lat, o.f.lng], NODE_SHAPE[o.f.kind] || 'hex', STATES[o.f.state] || '#455a64', Math.max(3.5, (big ? 7 : 6) * S.nodeSize * f), null, { weight: 1.6 });
+      }
+      m.addTo(layer);
+      nodeMarkers[o.id] = { m: m, sig: sig, dom: asDom, o: o };
+    });
+    Object.keys(nodeMarkers).forEach(function (id) { if (!keep[id]) { layer.removeLayer(nodeMarkers[id].m); delete nodeMarkers[id]; } });
+    declutter();
+  }
+  /* Подписи линий — только видимых и не налезающих друг на друга */
+  function drawLineLabels() {
+    var z = map.getZoom(), keep = {}, b = map.getBounds(), n = 0, show = !(S.lineLbl === 'never' || (S.lineLbl === 'zoom' && z < 13));
+    if (show) alive().forEach(function (o) {
+      if (o.type === 'node' || !o.f.name || n > 400) return;
+      if (sel && sel.type === 'line' && sel.id === o.id && mode === 'edit' && !tool) return;
+      var pts = ptsOf(o);
+      if (pts.length < 2) return;
+      var k = Math.floor((pts.length - 1) / 2), a2 = pts[k], b2 = pts[k + 1] || a2, at = [(a2.lat + b2.lat) / 2, (a2.lng + b2.lng) / 2];
+      if (!b.contains(at)) return;
+      n++;
+      var fib = o.type === 'fiber' && o.f.fibers && z >= 14 ? ' · ' + esc(String(o.f.fibers)) + ' ж' : '';
+      var html = '<div class="ap-llbl ' + o.type + '">' + esc(o.f.name) + (S.lineLen ? ' · ' + len(lenOf(pts)) : '') + fib + '</div>';
+      keep[o.id] = true;
+      var old = lineLabels[o.id];
+      if (old && old.html === html && old.at[0] === at[0] && old.at[1] === at[1]) return;
+      if (old) layer.removeLayer(old.m);
+      lineLabels[o.id] = { html: html, at: at, m: L.marker(at, { interactive: false, keyboard: false, icon: L.divIcon({ className: 'ap-ll', html: html, iconSize: [0, 0] }) }).addTo(layer) };
+    });
+    Object.keys(lineLabels).forEach(function (id) { if (!keep[id]) { layer.removeLayer(lineLabels[id].m); delete lineLabels[id]; } });
+  }
+  /* Подписи: сначала выделенный и крупные узлы, затем остальные; налезающая подпись скрывается */
+  function declutter() {
+    var boxes = [], list = [];
+    Object.keys(nodeMarkers).forEach(function (id) { var d = nodeMarkers[id]; if (d.dom && d.m._icon) list.push(d); });
+    function rank(d) { var k = d.o.f.kind; return (d.sig.indexOf('|s|') >= 0 ? 0 : k === 'опорный узел' || k === 'узел агрегации' ? 1 : k === 'базовая станция' || k === 'коммутатор' ? 2 : 3); }
+    list.sort(function (a, b) { return rank(a) - rank(b); });
+    list.forEach(function (d) {
+      var p = map.latLngToContainerPoint(d.m.getLatLng()), w = Math.min(160, (d.o.f.name || '').length * 6.4 + 10), h = 15, y = p.y + 14;
+      var bx = [p.x - w / 2, y, p.x + w / 2, y + h];
+      var hit = !d.o.f.name || boxes.some(function (q) { return bx[0] < q[2] && bx[2] > q[0] && bx[1] < q[3] && bx[3] > q[1]; });
+      d.m._icon.classList.toggle('ap-lbl-off', hit && !!d.o.f.name);
+      if (!hit) boxes.push(bx);
+    });
+  }
+  function decor() { drawPoints(); drawNodes(); drawLineLabels(); }
+  map.on('moveend', decor);
 
+  // --------------------------------------------------------------- линии (перерисовка только изменённых)
+
+  var drawn = {};
   function refresh() {
-    layer.clearLayers();
-    var z = map.getZoom(), objs = alive();
-    objs.filter(function (o) { return o.type !== 'node'; }).forEach(function (o) { drawLine(o, z); });
-    objs.filter(function (o) { return o.type === 'node' && isFinite(o.f.lat) && isFinite(o.f.lng); }).forEach(drawNode);
-    drawPoints();
+    index = null;
+    var z = map.getZoom(), seen = {}, redrew = false;
+    alive().forEach(function (o) {
+      if (o.type === 'node') return;
+      seen[o.id] = true;
+      var isSel = sel && sel.type === 'line' && sel.id === o.id, editSel = isSel && mode === 'edit' && !tool;
+      var flags = [o.t, isSel ? 's' : '', editSel ? 'e' : '', pc && mode === 'view' ? 'v' : '', S.lineW, gen].join('|'), d = drawn[o.id];
+      if (d && d.ref === o && d.flags === flags) return;
+      if (d) d.layers.forEach(function (l) { layer.removeLayer(l); });
+      drawn[o.id] = { ref: o, flags: flags, layers: drawLine(o, z) };
+      redrew = true;
+    });
+    Object.keys(drawn).forEach(function (id) { if (!seen[id]) { drawn[id].layers.forEach(function (l) { layer.removeLayer(l); }); delete drawn[id]; } });
+    decor();
+    if (redrew) {   // новые линии легли на холст поверх значков — значки снова наверх
+      Object.keys(pointMarkers).forEach(function (k) { pointMarkers[k].m.bringToFront(); });
+      Object.keys(nodeMarkers).forEach(function (k) { var d = nodeMarkers[k]; if (!d.dom) d.m.bringToFront(); });
+    }
     drawTool();
     if (view && (view.k === 'card' || view.k === 'pt' || view.k === 'line' || view.k === 'nodemenu' || view.k === 'tool')) renderView();
   }
 
-  function drawNode(o) {
-    var isSel = sel && sel.type === 'node' && sel.id === o.id;
-    var m = L.marker([o.f.lat, o.f.lng], {
-      icon: nodeIcon(o, isSel), draggable: mode === 'edit' && isSel && !tool, bubblingMouseEvents: true, keyboard: false, zIndexOffset: isSel ? 900 : 500
-    });
-    if (pc && mode === 'view') m.bindTooltip(esc(o.f.name || '') + (o.f.kind ? ' · ' + esc(o.f.kind) : ''), { direction: 'top', offset: [0, -12] });
-    m.on('dragend', function () {
-      lastDrag = Date.now();
-      var ll = m.getLatLng();
-      put(o.id, 'node', { lat: +ll.lat.toFixed(6), lng: +ll.lng.toFixed(6) }, 'перемещён', true);
-      var n = follow(o.id);
-      toast('Узел перемещён' + (n ? ', линий за ним: ' + n : ''));
-    });
-    m.addTo(layer);
-  }
-
   function drawLine(o, z) {
-    var pts = ptsOf(o);
-    if (pts.length < 2) return;
-    var isSel = sel && sel.type === 'line' && sel.id === o.id, editSel = isSel && mode === 'edit' && !tool;
+    var pts = ptsOf(o), out = [];
+    if (pts.length < 2) return out;
+    function add(l) { l.addTo(layer); out.push(l); return l; }
+    var isSel = sel && sel.type === 'line' && sel.id === o.id, editSel = isSel && mode === 'edit' && !tool, w = S.lineW;
+    var tip = pc && mode === 'view' ? esc(o.f.name || '') + ' · ' + len(lenOf(pts)) + (o.f.fibers ? ' · ' + esc(String(o.f.fibers)) + ' ж' : '') : null;
     var ll = pts.map(function (p) { return [p.lat, p.lng]; });
-    if (isSel) L.polyline(ll, { color: '#1a73e8', weight: 16, opacity: .25, interactive: false }).addTo(layer);
+    if (isSel) add(L.polyline(ll, { renderer: canvas, color: '#1a73e8', weight: 18 * w, opacity: .3, interactive: false }));
     if (o.type === 'radio') {
-      L.polyline(ll, { color: '#fff', weight: (isSel ? 9 : 7) * S.lineW, opacity: .8, interactive: false }).addTo(layer);
-      L.polyline(ll, { color: '#1565c0', weight: (isSel ? 5 : 3.5) * S.lineW, dashArray: '9 7', bubblingMouseEvents: true }).addTo(layer);
+      add(L.polyline(ll, { renderer: canvas, color: '#0b2545', weight: (isSel ? 10 : 8) * w, opacity: .35, interactive: false }));
+      add(L.polyline(ll, { renderer: canvas, color: '#fff', weight: (isSel ? 8 : 6.5) * w, opacity: .9, interactive: false }));
+      var rl = add(L.polyline(ll, { renderer: canvas, color: '#1565c0', weight: (isSel ? 5 : 3.5) * w, dashArray: '9 7', bubblingMouseEvents: true }));
+      if (tip) rl.bindTooltip(tip, { sticky: true });
     } else {
-      var lay = layOf(o), runs = [], cur = null;
+      var lay = layOf(o), runs = [], cur = null, heavy = +o.f.fibers >= 64 ? 1.25 : +o.f.fibers >= 16 ? 1.1 : 1;
       for (var i = 0; i < lay.length; i++) {
         if (!cur || cur.lay !== lay[i]) { cur = { lay: lay[i], ll: [ll[i]] }; runs.push(cur); }
         cur.ll.push(ll[i + 1]);
       }
-      runs.forEach(function (r) {
-        L.polyline(r.ll, { color: '#fff', weight: (isSel ? 10 : 8) * S.lineW, opacity: .85, interactive: false }).addTo(layer);
-      });
+      // обводка: тёмная тень (видно на снимках) и белая подложка (видно на схеме)
+      add(L.polyline(ll, { renderer: canvas, color: '#0b1a2a', weight: ((isSel ? 11 : 9) * heavy + 1.5) * w, opacity: .3, interactive: false, lineJoin: 'round' }));
+      add(L.polyline(ll, { renderer: canvas, color: '#fff', weight: (isSel ? 10 : 8) * heavy * w, opacity: .92, interactive: false, lineJoin: 'round' }));
       runs.forEach(function (r) {
         var s = LAY[r.lay] || LAY.air;
-        L.polyline(r.ll, { color: s.color, weight: (isSel ? 6 : 4.5) * S.lineW, dashArray: s.dash, lineCap: s.dash ? 'butt' : 'round', bubblingMouseEvents: true }).addTo(layer);
+        var pl = add(L.polyline(r.ll, { renderer: canvas, color: s.color, weight: (isSel ? 6 : 4.5) * heavy * w, dashArray: s.dash, lineCap: s.dash ? 'butt' : 'round', lineJoin: 'round', bubblingMouseEvents: true }));
+        if (tip) pl.bindTooltip(tip, { sticky: true });
       });
     }
-    if (pc && mode === 'view') {
-      // в просмотре на компьютере — подсказка при наведении
-      L.polyline(ll, { color: '#000', opacity: 0, weight: 16, bubblingMouseEvents: true })
-        .bindTooltip(esc(o.f.name || '') + ' · ' + len(lenOf(pts)), { sticky: true }).addTo(layer);
-    }
-    // точки линии
+    // точки выделенной линии — ручки
     if (editSel) {
       pts.forEach(function (p, i) {
-        var h = L.marker([p.lat, p.lng], { icon: handleIcon(p, o.type), draggable: true, bubblingMouseEvents: true, keyboard: false, zIndexOffset: 1000 });
+        var h = add(L.marker([p.lat, p.lng], { icon: handleIcon(p, o.type), draggable: true, bubblingMouseEvents: true, keyboard: false, zIndexOffset: 1000 }));
         var prev = null;
         h.on('drag', function () {
           var a = [];
@@ -917,34 +1088,69 @@
           if (prev) toolLayer.removeLayer(prev);
           movePoint(o.id, i, h.getLatLng());
         });
-        h.addTo(layer);
       });
       for (var j = 0; o.type === 'fiber' && j + 1 < pts.length; j++) (function (j) {
         var a = pts[j], b = pts[j + 1];
-        var m = L.marker([(a.lat + b.lat) / 2, (a.lng + b.lng) / 2], {
+        var m = add(L.marker([(a.lat + b.lat) / 2, (a.lng + b.lng) / 2], {
           icon: L.divIcon({ className: '', html: '<div class="ap-mid">+</div>', iconSize: [20, 20], iconAnchor: [10, 10] }),
           draggable: true, keyboard: false, zIndexOffset: 800, title: 'Добавить точку'
-        });
+        }));
         m.on('click', function (e) { L.DomEvent.stopPropagation(e); insertPoint(o.id, j, m.getLatLng()); });
         m.on('dragend', function () { lastDrag = Date.now(); insertPoint(o.id, j, m.getLatLng()); });
-        m.addTo(layer);
       })(j);
     }
-    // подпись линии
-    if (o.f.name && !editSel) {
-      var k = Math.floor((pts.length - 1) / 2), a2 = pts[k], b2 = pts[k + 1] || a2;
-      L.marker([(a2.lat + b2.lat) / 2, (a2.lng + b2.lng) / 2], { interactive: false, keyboard: false,
-        icon: L.divIcon({ className: '', html: '<div class="ap-llbl ' + o.type + '">' + esc(o.f.name) + (S.lineLen ? ' · ' + len(lenOf(pts)) : '') + '</div>', iconSize: [0, 0] }) }).addTo(layer);
+    return out;
+  }
+
+  // ================================================================== поиск рядом: сетка по координатам
+
+  /* Попадание пальцем и прилипание перекрестия спрашивают «что рядом» при каждом движении карты.
+   * Сетка (клетки 0,01°) отвечает, не перебирая всю сеть; строится заново после каждой правки. */
+  var index = null, GRID = 0.01;
+  function cellKey(a, b) { return a + ':' + b; }
+  function buildIndex() {
+    var g = {};
+    function add(lat, lng, item) { var k = cellKey(Math.floor(lat / GRID), Math.floor(lng / GRID)); (g[k] || (g[k] = [])).push(item); }
+    alive().forEach(function (o) {
+      if (o.type === 'node') { if (isFinite(o.f.lat) && isFinite(o.f.lng)) add(+o.f.lat, +o.f.lng, { n: o }); return; }
+      var pts = ptsOf(o);
+      pts.forEach(function (q, i) {
+        if (o.type === 'fiber') add(q.lat, q.lng, { o: o, i: i });
+        var r = pts[i + 1];
+        if (!r) return;
+        var la0 = Math.floor(Math.min(q.lat, r.lat) / GRID), la1 = Math.floor(Math.max(q.lat, r.lat) / GRID);
+        var ln0 = Math.floor(Math.min(q.lng, r.lng) / GRID), ln1 = Math.floor(Math.max(q.lng, r.lng) / GRID);
+        if ((la1 - la0 + 1) * (ln1 - ln0 + 1) > 400) { (g.long || (g.long = [])).push({ o: o, s: i }); return; }
+        for (var a = la0; a <= la1; a++) for (var b = ln0; b <= ln1; b++) { var k = cellKey(a, b); (g[k] || (g[k] = [])).push({ o: o, s: i }); }
+      });
+    });
+    return g;
+  }
+  /* всё, что в квадрате px вокруг точки экрана; null — квадрат слишком велик (мелкий масштаб) */
+  function around(p, px) {
+    if (!index) index = buildIndex();
+    var c = [[-px, -px], [px, px], [-px, px], [px, -px]].map(function (d) { return map.containerPointToLatLng(L.point(p.x + d[0], p.y + d[1])); });
+    var la0 = Math.floor(Math.min.apply(null, c.map(function (x) { return x.lat; })) / GRID), la1 = Math.floor(Math.max.apply(null, c.map(function (x) { return x.lat; })) / GRID);
+    var ln0 = Math.floor(Math.min.apply(null, c.map(function (x) { return x.lng; })) / GRID), ln1 = Math.floor(Math.max.apply(null, c.map(function (x) { return x.lng; })) / GRID);
+    if ((la1 - la0 + 1) * (ln1 - ln0 + 1) > 2500) return null;
+    var out = { nodes: [], pts: [], segs: [] }, seen = {};
+    for (var a = la0; a <= la1; a++) for (var b = ln0; b <= ln1; b++) {
+      (index[cellKey(a, b)] || []).forEach(function (it) {
+        if (it.n) out.nodes.push(it.n);
+        else if (it.s == null) out.pts.push(it);
+        else { var k = it.o.id + ':' + it.s; if (!seen[k]) { seen[k] = 1; out.segs.push(it); } }
+      });
     }
+    (index.long || []).forEach(function (it) { out.segs.push(it); });
+    return out;
   }
 
   // ================================================================== попадание пальцем: узел, точка, линия
 
   function cp(lat, lng) { return map.latLngToContainerPoint([lat, lng]); }
   function nearNode(p, px) {
-    var best = null, bd = px || 24;
-    alive().forEach(function (o) {
-      if (o.type !== 'node') return;
+    var best = null, bd = px || 24, c = around(p, bd);
+    (c ? c.nodes : alive().filter(function (o) { return o.type === 'node'; })).forEach(function (o) {
       var d = p.distanceTo(cp(o.f.lat, o.f.lng));
       if (d < bd) { bd = d; best = o; }
     });
@@ -952,28 +1158,26 @@
   }
   /* ближайшая точка чужой линии ВОЛС (не на узле); skip — точки, которые не считать */
   function nearPt(p, px, skipId, skip, shownOnly) {
-    var best = null, bd = px, z = map.getZoom();
-    alive().forEach(function (o) {
-      if (o.type !== 'fiber' || o.id === skipId) return;
-      ptsOf(o).forEach(function (q, i) {
-        if (q.nid || (shownOnly && !ptShown(q.kind, z))) return;
-        if (skip && skip.some(function (j) { return j.id === o.id && j.i === i; })) return;
-        var d = p.distanceTo(cp(q.lat, q.lng));
-        if (d < bd) { bd = d; best = { id: o.id, i: i, p: q }; }
-      });
+    var best = null, bd = px, z = map.getZoom(), c = around(p, px), list = c ? c.pts : [];
+    if (!c) alive().forEach(function (o) { if (o.type === 'fiber') ptsOf(o).forEach(function (q, i) { list.push({ o: o, i: i }); }); });
+    list.forEach(function (it) {
+      var o = it.o, i = it.i, q = ptsOf(o)[i];
+      if (!q || o.type !== 'fiber' || o.id === skipId || q.nid || (shownOnly && !ptShown(q.kind, z))) return;
+      if (skip && skip.some(function (j) { return j.id === o.id && j.i === i; })) return;
+      var d = p.distanceTo(cp(q.lat, q.lng));
+      if (d < bd) { bd = d; best = { id: o.id, i: i, p: q }; }
     });
     return best;
   }
   function nearSeg(p, px, skipId, fiberOnly) {
-    var best = null, bd = px;
-    alive().forEach(function (o) {
-      if (o.type === 'node' || o.id === skipId || (fiberOnly && o.type !== 'fiber')) return;
-      var pts = ptsOf(o);
-      for (var i = 0; i + 1 < pts.length; i++) {
-        var a = cp(pts[i].lat, pts[i].lng), b = cp(pts[i + 1].lat, pts[i + 1].lng);
-        var d = L.LineUtil.pointToSegmentDistance(p, a, b);
-        if (d < bd) { bd = d; best = { type: 'line', id: o.id, seg: i, at: L.LineUtil.closestPointOnSegment(p, a, b) }; }
-      }
+    var best = null, bd = px, c = around(p, px), list = c ? c.segs : [];
+    if (!c) alive().forEach(function (o) { if (o.type !== 'node') for (var i = 0; i + 1 < ptsOf(o).length; i++) list.push({ o: o, s: i }); });
+    list.forEach(function (it) {
+      var o = it.o, i = it.s, pts = ptsOf(o);
+      if (o.type === 'node' || o.id === skipId || (fiberOnly && o.type !== 'fiber') || !pts[i + 1]) return;
+      var a = cp(pts[i].lat, pts[i].lng), b = cp(pts[i + 1].lat, pts[i + 1].lng);
+      var d = L.LineUtil.pointToSegmentDistance(p, a, b);
+      if (d < bd) { bd = d; best = { type: 'line', id: o.id, seg: i, at: L.LineUtil.closestPointOnSegment(p, a, b) }; }
     });
     return best;
   }
@@ -1109,7 +1313,7 @@
         (L2.ground_guess ? kvRow('Предполагается в земле', len(L2.ground_guess)) : '') +
         kvRow('Откуда', a && a.nid ? esc(nodeName(a.nid)) : '') + kvRow('Куда', b && b.nid ? esc(nodeName(b.nid)) : '') +
         (o.type === 'fiber' ? kvRow('Точки', pts.length + (Object.keys(kinds).length ? ' (' + Object.keys(kinds).map(function (k) { return esc(k) + ' ' + kinds[k]; }).join(', ') + ')' : '')) : '') +
-        (o.type === 'fiber' ? kvRow('Кабель', esc([f.cable, f.fibers ? f.fibers + ' вол.' : ''].filter(Boolean).join(', '))) : '') +
+        (o.type === 'fiber' ? kvRow('Кабель', esc([f.fibers ? f.fibers + ' жил' : '', f.cable].filter(Boolean).join(', '))) : '') +
         kvRow('Примечание', esc(f.note || '')) + (shared ? kvRow('Добавил', esc(o.createdBy || o.by || 'Без подписи')) : '') + kvRow('Изменено', esc(o.by || '') + ', ' + when(o.t)) + '</table>';
       if (o.type === 'fiber') {
         var js = lineConnections(o, pts);
@@ -1118,7 +1322,7 @@
             esc(j.p.kind || 'точка') + (j.p.name ? ' ' + esc(j.p.name) : '') + ', точка ' + (j.at + 1) + '</div></div></div>';
         }).join('');
       }
-      if (mode === 'edit') html += btnRow((o.type === 'fiber' ? [['cont', 'Продолжить линию']] : []).concat([['name', 'Название…', 't'], ['del', 'Удалить', 'd']])) +
+      if (mode === 'edit') html += btnRow((o.type === 'fiber' ? [['cont', 'Продолжить линию'], ['next', 'Новая от конца', 't']] : []).concat([['name', 'Свойства…', 't'], ['del', 'Удалить', 'd']])) +
         '<p class="muted">' + (o.type === 'fiber' ? 'Тяните точки, «+» между точками — новая точка. Нажатие на точку или долгое нажатие на линию — меню.' : 'Концы радиолинии можно перетащить.') + '</p>';
       html += '<div class="sec">Все точки</div>' + pts.map(function (p, i) {
         var nm = p.nid ? nodeName(p.nid) : (p.name || '');
@@ -1130,6 +1334,11 @@
       body.innerHTML = html;
       bind(body, {
         cont: function () { startLine(o.type, null, o.id); },
+        next: function () {   // следующая линия начинается там, где закончилась эта (узел или точка)
+          var e = pts[pts.length - 1];
+          if (e && e.nid && get(e.nid)) startLine('fiber', e.nid, null, null, lay[lay.length - 1]);
+          else if (e) startLine('fiber', null, null, { lat: e.lat, lng: e.lng, kind: e.kind || 'муфта', name: e.name || '' }, lay[lay.length - 1]);
+        },
         name: function () { editLine(o.id); },
         del: function () { askDelete(o.id); }
       });
@@ -1193,8 +1402,8 @@
       { key: 'note', label: 'Примечание', type: 'textarea', value: f.note }
     ].concat(whoField());
   }
-  function newNode(ll) {
-    form('Новый узел', nodeFields({}), 'Добавить', function (v) {
+  function newNode(ll, kind) {
+    form('Новый узел', nodeFields({ kind: kind, name: kind ? nextNodeName(kind) : '' }), 'Добавить', function (v) {
       var o = put(null, 'node', { name: v.name, kind: v.kind, state: v.state, addr: v.addr, note: v.note, lat: +ll.lat.toFixed(6), lng: +ll.lng.toFixed(6) });
       sel = { type: 'node', id: o.id }; refresh(); showCard(o.id);
       toast('Узел «' + v.name + '» добавлен');
@@ -1446,13 +1655,13 @@
     form(cap(TYPE_NAME[o.type]), [
       { key: 'name', label: 'Название', value: o.f.name, required: true }
     ].concat(fib ? [
-      { key: 'fibers', label: 'Число волокон', value: o.f.fibers, placeholder: 'например: 16' },
+      { key: 'fibers', label: 'Число жил', type: 'select', options: [''].concat(FIBERS).concat(o.f.fibers && FIBERS.indexOf(String(o.f.fibers)) < 0 ? [String(o.f.fibers)] : []), value: o.f.fibers == null ? '' : String(o.f.fibers) },
       { key: 'cable', label: 'Марка кабеля', value: o.f.cable, placeholder: 'например: ОКСН-16' }
     ] : []).concat([
       { key: 'note', label: 'Примечание', type: 'textarea', value: o.f.note }
     ]).concat(whoField()), 'Сохранить', function (v) {
       var f = { name: v.name, note: v.note };
-      if (fib) { f.fibers = v.fibers; f.cable = v.cable; }
+      if (fib) { f.fibers = v.fibers; f.cable = v.cable; if (FIBERS.indexOf(v.fibers) >= 0) try { localStorage.setItem(FIB_KEY, v.fibers); } catch (e) { /* не важно */ } }
       if (v.name !== o.f.name) f.autoName = false;
       put(id, o.type, f);
     });
@@ -1586,16 +1795,40 @@
     refresh();
     placeCross();
   }
-  function startNode() { startTool({ kind: 'node' }); }
+  var NK_KEY = 'karta_nodekind';
+  function startNode() {
+    var k = '';
+    try { k = localStorage.getItem(NK_KEY) || ''; } catch (e) { k = ''; }
+    startTool({ kind: 'node', nodeKind: NODE_KINDS.indexOf(k) >= 0 ? k : NODE_KINDS[0] });
+  }
+  var ABBR = { 'узел доступа': 'УД', 'узел агрегации': 'УА', 'опорный узел': 'ОУ', 'коммутатор': 'КМ', 'базовая станция': 'БС', 'точка доступа Wi-Fi': 'ТД', 'шкаф': 'ШК', 'клиент': 'КЛ', 'другое': 'ОБ' };
+  function nextNodeName(kind) {
+    var pre = ABBR[kind] || 'У', re = new RegExp('^' + pre + '-(\\d+)$'), n = 0;
+    alive().forEach(function (o) { var m = o.type === 'node' && re.exec(o.f.name || ''); if (m) n = Math.max(n, +m[1]); });
+    return pre + '-' + (n + 1);
+  }
+  /* узел одним нажатием: вид — выбранный, название — по порядку; инструмент остаётся для следующего */
+  function quickNode(ll) {
+    var t = tool;
+    if (!t || t.kind !== 'node') return;
+    var n = S.snap ? nearNode(map.latLngToContainerPoint(ll), 16) : null;
+    if (n) { toast('Здесь уже есть узел «' + (n.f.name || '') + '»'); return; }
+    var name = nextNodeName(t.nodeKind);
+    var o = put(null, 'node', { name: name, kind: t.nodeKind, state: 'работает', lat: +ll.lat.toFixed(6), lng: +ll.lng.toFixed(6) });
+    buzz();
+    t.last = { id: o.id, name: name };
+    renderTool();
+    toast('Узел «' + name + '» добавлен');
+  }
   /* новая линия (от узла fromId, если задан) или продолжение линии contId */
   function startLine(type, fromId, contId, fromPt, lay) {
     if (type === 'radio' && contId) return;
     lay = LAY_KEYS.indexOf(lay) >= 0 ? lay : 'air';
-    var t = { kind: 'line', type: type, id: null, pts: [], lay: [], nextLay: lay, nextKind: pointKind(lay) };
+    var t = { kind: 'line', type: type, id: null, pts: [], lay: [], nextLay: lay, nextKind: pointKind(lay), fibers: type === 'fiber' ? lastFibers() : '' };
     if (contId) {
       var o = get(contId);
       if (!o) return;
-      t.id = o.id; t.type = o.type; t.pts = copy(ptsOf(o)); t.lay = o.type === 'fiber' ? layOf(o) : [];
+      t.id = o.id; t.type = o.type; t.pts = copy(ptsOf(o)); t.lay = o.type === 'fiber' ? layOf(o) : []; t.fibers = o.f.fibers == null ? '' : String(o.f.fibers);
       if (t.lay.length) { t.nextLay = t.lay[t.lay.length - 1]; t.nextKind = pointKind(t.nextLay); }
       var last = t.pts[t.pts.length - 1];
       if (last) centerAt(L.latLng(last.lat, last.lng));
@@ -1637,7 +1870,7 @@
     var tp = map.latLngToContainerPoint(ll);
     if (Date.now() - lastTap < 350 && lastTapPt && tp.distanceTo(lastTapPt) < 30) return;      // двойное касание — одна точка
     lastTap = Date.now(); lastTapPt = tp;
-    if (tool.kind === 'node') { var t = ll; finishTool(); newNode(t); return; }
+    if (tool.kind === 'node') { quickNode(ll); return; }
     if (tool.kind === 'line') {
       var hn = h && h.type === 'node' ? get(h.id) : null, ho = h && h.type === 'pt' ? get(h.id) : null;
       if (hn) addPoint(L.latLng(hn.f.lat, hn.f.lng), hn);
@@ -1667,6 +1900,7 @@
     if (last && Math.abs(last.lat - p.lat) < 1e-7 && Math.abs(last.lng - p.lng) < 1e-7) { toast('Точка уже стоит здесь — сдвиньте карту'); return; }
     if (t.pts.length) t.lay.push(t.nextLay);
     t.pts.push(p);
+    buzz();
     persistTool();
     if (t.type === 'radio' && t.pts.length >= 2) { toast('Радиолиния: ' + len(lenOf(t.pts))); finishTool(); return; }
     if (node && t.pts.length >= 2) { toast('Линия доведена до узла «' + (node.f.name || '') + '»'); finishTool(); return; }
@@ -1680,7 +1914,7 @@
     var o = t.id ? get(t.id) : null;
     if (!o) {
       var f = { name: autoName(t.type, t.pts), autoName: true, dist: lenOf(t.pts), from: t.pts[0].nid || '', to: t.pts[t.pts.length - 1].nid || '' };
-      if (t.type === 'radio') f.points = copy(t.pts); else { f.fnodes = copy(t.pts); f.lay = t.lay.slice(); }
+      if (t.type === 'radio') f.points = copy(t.pts); else { f.fnodes = copy(t.pts); f.lay = t.lay.slice(); if (t.fibers) f.fibers = t.fibers; }
       o = put(null, t.type, f);
       t.id = o.id;
       sel = { type: 'line', id: o.id };
@@ -1705,10 +1939,22 @@
     var body, html = '';
     if (t.kind === 'node') {
       body = openSheet('Новый узел', view);
-      html = '<p class="muted">Двигайте карту, чтобы перекрестие встало на место узла, или просто нажмите на это место.</p>' +
-        btnRow([['place', 'Поставить узел здесь', 'big']]) + btnRow([['cancel', 'Отмена', 't']]);
+      html = '<div class="chips tight scroll">' + NODE_KINDS.map(function (k) {
+          return '<button type="button" class="chip' + (t.nodeKind === k ? ' on' : '') + '" data-nk="' + esc(k) + '">' + shapeSvg(k, STATES['работает'], 16) + esc(k) + '</button>';
+        }).join('') + '</div>' +
+        '<p class="muted">' + (t.last ? 'Добавлен «' + esc(t.last.name) + '». ' : '') + 'Нажмите на место узла или поставьте его в перекрестие. Название дастся само — его можно изменить потом.</p>' +
+        btnRow([['place', 'Поставить узел здесь', 'big']]) + btnRow((t.last ? [['edit', 'Изменить «' + t.last.name + '»', 't']] : []).concat([['form', 'С заполнением…', 't'], ['cancel', 'Готово', 't']]));
       body.innerHTML = html;
-      bind(body, { place: function () { var ll = crossLatLng(); finishTool(); newNode(ll); }, cancel: finishTool });
+      bind(body, {
+        place: function () { quickNode(crossLatLng()); },
+        form: function () { var ll = crossLatLng(); finishTool(); newNode(ll, t.nodeKind); },
+        edit: function () { var id = t.last && t.last.id; finishTool(); if (get(id)) editNode(id); },
+        cancel: finishTool
+      });
+      body.querySelectorAll('[data-nk]').forEach(function (b) {
+        b.onclick = function () { t.nodeKind = b.getAttribute('data-nk'); try { localStorage.setItem(NK_KEY, t.nodeKind); } catch (e) { /* не важно */ } renderTool(); };
+      });
+      placeCross();
       return;
     }
     var o = t.id ? get(t.id) : null, name = o ? o.f.name : (t.type === 'radio' ? 'Новая радиолиния' : 'Новая линия ВОЛС');
@@ -1716,6 +1962,9 @@
     html = '<div class="muted">Точек: <b>' + t.pts.length + '</b> · ' + len(lenOf(t.pts)) +
       (t.pts.length ? '' : ' · двигайте карту — точка встаёт в перекрестие, или нажмите на место') + '</div>';
     if (t.type === 'fiber') {
+      html += '<div class="chips tight scroll fib" title="Число жил кабеля"><span class="muted">Жил:</span>' + FIBERS.map(function (k) {
+          return '<button type="button" class="chip' + (String(t.fibers) === k ? ' on' : '') + '" data-fib="' + k + '">' + k + '</button>';
+        }).join('') + '</div>';
       html += layChips(t.nextLay, 'next') +
         '<div class="chips tight scroll">' + PT_KINDS.map(function (k) {
           return '<button type="button" class="chip' + (t.nextKind === k ? ' on' : '') + '" data-k="' + k + '">' + ptSvg(k, 16) + k + '</button>';
@@ -1733,6 +1982,15 @@
       b.onclick = function () { t.nextLay = b.getAttribute('data-lay'); t.nextKind = pointKind(t.nextLay); renderTool(); };
     });
     body.querySelectorAll('[data-k]').forEach(function (b) { b.onclick = function () { t.nextKind = b.getAttribute('data-k'); renderTool(); }; });
+    body.querySelectorAll('[data-fib]').forEach(function (b) {
+      b.onclick = function () {
+        var v = b.getAttribute('data-fib');
+        t.fibers = t.fibers === v ? '' : v;
+        try { if (t.fibers) localStorage.setItem(FIB_KEY, t.fibers); } catch (e) { /* не важно */ }
+        if (t.id && get(t.id)) put(t.id, 'fiber', { fibers: t.fibers }, 'число жил', true);
+        renderTool();
+      };
+    });
     placeCross();
   }
 
@@ -1770,7 +2028,7 @@
     var list = alive().filter(function (o) {
       if (filter === 'node' || filter === 'fiber' || filter === 'radio') { if (o.type !== filter) return false; }
       else if (filter !== 'all' && (o.type !== 'node' || o.f.state !== filter)) return false;
-      return !query || [o.f.name, o.f.addr, o.f.note, o.f.kind].join(' ').toLowerCase().indexOf(query) >= 0;
+      return !query || [o.f.name, o.f.addr, o.f.note, o.f.kind, o.f.cable, o.f.fibers ? o.f.fibers + ' ж ' + o.f.fibers + 'ж' : ''].join(' ').toLowerCase().indexOf(query) >= 0;
     }).sort(function (a, b) {
       var ord = { node: 0, fiber: 1, radio: 2 };
       return ord[a.type] - ord[b.type] || String(a.f.name || '').localeCompare(String(b.f.name || ''), 'ru', { numeric: true });
@@ -1784,7 +2042,7 @@
     box.innerHTML = list.slice(0, 400).map(function (o) {
       var ico, sub;
       if (o.type === 'node') { ico = shapeSvg(o.f.kind, STATES[o.f.state] || '#455a64', 20); sub = esc(o.f.kind || '') + ' · ' + esc(o.f.state || '') + (o.f.addr ? ' · ' + esc(o.f.addr) : ''); }
-      else { ico = (o.type === 'radio' ? I.radio : I.fiber).replace('<svg', '<svg width="20" height="20"'); sub = TYPE_NAME[o.type] + ' · ' + len(lenOf(ptsOf(o))); }
+      else { ico = (o.type === 'radio' ? I.radio : I.fiber).replace('<svg', '<svg width="20" height="20"'); sub = TYPE_NAME[o.type] + ' · ' + len(lenOf(ptsOf(o))) + (o.f.fibers ? ' · ' + esc(fibLabel(o.f.fibers)) : ''); }
       return '<div class="item" data-go="' + esc(o.id) + '">' + ico + '<div class="tx"><div><b>' + esc(o.f.name || 'без названия') + '</b></div><div class="muted">' + sub + '</div></div></div>';
     }).join('');
     box.querySelectorAll('[data-go]').forEach(function (it) { it.onclick = function () { focusObj(it.getAttribute('data-go')); }; });
@@ -1972,8 +2230,9 @@
       return r + '</div>';
     }
     html += '<div class="sec">Районы — из интернета</div>' + REGIONS.map(row).join('');
-    var other = files.filter(function (f) { return !REGIONS.some(function (g) { return g.slug === f.slug || g.slug + '-sat' === f.slug; }); });
+    var other = files.filter(function (f) { return f.builtin || !REGIONS.some(function (g) { return g.slug === f.slug || g.slug + '-sat' === f.slug; }); });
     if (other.length) html += '<div class="sec">Другие файлы карт</div>' + other.map(function (f) {
+      if (f.builtin) return '<div class="srow"><span>Схема левого берега Днепра<small>встроена в приложение, ' + mb(f.size) + ', работает без интернета</small></span></div>';
       return '<div class="srow"><span>' + esc(f.name && f.name !== f.slug ? f.name : f.slug) + '<small>' + (f.kind === 'sat' ? 'снимки' : 'схема') + ', ' + mb(f.size) + '</small></span>' +
         (mapOwner ? '<button type="button" class="b d" data-del="' + esc(f.slug) + '">Удалить</button>' : '') + '</div>';
     }).join('');
@@ -2086,7 +2345,7 @@
     return null;
   }
   var FIELD = { name: 'название', kind: 'вид', state: 'состояние', addr: 'адрес', note: 'примечание', lat: 'место', lng: 'место',
-    fnodes: 'трасса', points: 'трасса', lay: 'прокладка', fibers: 'волокна', cable: 'кабель' };
+    fnodes: 'трасса', points: 'трасса', lay: 'прокладка', fibers: 'жилы', cable: 'кабель' };
   var ROUTE_FIELDS = ['fnodes', 'points', 'lay', 'dist', 'from', 'to'];
   function routeRevision(o) {
     if (o.type !== 'fiber' && o.type !== 'radio') return '';
@@ -2214,7 +2473,7 @@
 
   var exNote = '';
   function showExchange() {
-    var c = counts(db), prev = localStorage.getItem(PREV), editable = !shared || shared.user().role !== 'viewer';
+    var c = counts(db), prev = readStore(PREV), editable = !shared || shared.user().role !== 'viewer';
     openDlg('<h3>Обмен данными</h3><p class="muted">Ваша карта: узлов ' + c.node + ', линий ВОЛС ' + c.fiber + ', радиолиний ' + c.radio + '.</p>' +
       '<div class="sec">Отправить свою карту</div>' +
       (android ? btnRow([['share', 'Поделиться файлом'], ['save', 'Сохранить в файл', 't']]) : btnRow([['save', 'Сохранить в файл']])) +
@@ -2240,9 +2499,9 @@
       open: function () { if (android) android.openFile(); else picker.click(); },
       undo: function () {
         confirmDlg('Вернуть карту, какой она была до загрузки файла?', 'Вернуть', function () {
-          var p = localStorage.getItem(PREV);
+          var p = readStore(PREV);
           if (!p) return;
-          try { var d = JSON.parse(p); if (valid(d.net)) { db = d.net; save(); localStorage.removeItem(PREV); select(null); closeSheet(); refresh(); toast('Карта возвращена'); } } catch (e) { toast('Не удалось вернуть'); }
+          try { var d = JSON.parse(p); if (valid(d.net)) { db = d.net; save(); writeStore(PREV, null); select(null); closeSheet(); refresh(); toast('Карта возвращена'); } } catch (e) { toast('Не удалось вернуть'); }
         });
       }
     });
@@ -2302,9 +2561,9 @@
       all.sort(function (a, b) { return (b.t || 0) - (a.t || 0); });
       return all.slice(0, JOURNAL_MAX);
     }
-    function done(text) { save(); closeDlg(); select(null); if (view) closeSheet(); refresh(); setTimeout(fitAll, 60); toast(text); }
+    function done(text) { dirty = null; gen++; save(); closeDlg(); select(null); if (view) closeSheet(); refresh(); setTimeout(fitAll, 60); toast(text); }
     function applyMerge(choices) {
-        localStorage.setItem(PREV, JSON.stringify({ saved: Date.now(), net: db }));
+        try { writeStore(PREV, JSON.stringify({ saved: Date.now(), net: db })); } catch (e) { /* прежняя карта не поместилась — без «Вернуть как было» */ }
         var r = merge(p.data.net, false, choices);
         reconcileLines();
         db.journal = journal(p.data.net, 'добавлено новое из файла');
@@ -2327,7 +2586,7 @@
         }, 'cancel-routes': function () { received(name, text); } });
       },
       replace: function () {
-        localStorage.setItem(PREV, JSON.stringify({ saved: Date.now(), net: db }));
+        try { writeStore(PREV, JSON.stringify({ saved: Date.now(), net: db })); } catch (e) { /* прежняя карта не поместилась — без «Вернуть как было» */ }
         var inc = copy(p.data.net);
         inc.journal = journal(inc, 'карта заменена картой из файла');
         if (!inc.objs) inc.objs = {};
@@ -2407,6 +2666,7 @@
     document.documentElement.style.setProperty('--pw', Math.round(S.pcPanel * S.ui) + 'px');
     if (S.scale) scaleCtl.addTo(map); else scaleCtl.remove();
     zoomCls();
+    gen++;
     refresh();
     sizeChanged();
     setTimeout(function () { map.invalidateSize(); sizeChanged(); }, 60);
@@ -2549,6 +2809,10 @@
     try { v = JSON.parse(localStorage.getItem('karta_view')); } catch (e) { v = null; }
     if (v && isFinite(v[0]) && isFinite(v[1]) && isFinite(v[2])) map.setView([v[0], v[1]], v[2], { animate: false });
     else if (alive().length) setTimeout(fitAll, 80);
+    else if (window.KartaCoverage && KartaCoverage.bounds) {    // первый запуск, сети ещё нет — весь левый берег
+      var b = KartaCoverage.bounds;
+      map.fitBounds([[b[1], b[0]], [b[3], b[2]]], { animate: false, padding: [12, 12] });
+    }
     var t = 0;
     map.on('moveend', function () {
       clearTimeout(t);

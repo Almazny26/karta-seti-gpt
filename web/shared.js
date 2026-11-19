@@ -43,7 +43,7 @@
   }
   var J = function (v) { return v === undefined ? '' : JSON.stringify(v); };
   var FIELD = {name:'название', kind:'вид', state:'состояние', addr:'адрес', note:'примечание', lat:'положение', lng:'положение',
-    fnodes:'трасса', points:'точки', lay:'прокладка', deleted:'удаление'};
+    fnodes:'трасса', points:'точки', lay:'прокладка', fibers:'число жил', cable:'кабель', deleted:'удаление'};
   /* Слияние по полям: base — с чего начинали, mine — наша правка, srv — то, что уже на сервере.
      Поля, которые менял только один из двоих, объединяются; совпадающая правка — не конфликт. */
   function mergeObj(b, mine, srv) {

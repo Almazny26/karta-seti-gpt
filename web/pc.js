@@ -15,7 +15,7 @@
 
   window.KartaPC = true;
   window.KartaOfflineOnly = true;
-  var EXPECTED = '3.4.6';   // версия run.py, для которой написана эта страница
+  var EXPECTED = '3.5.0';   // версия run.py, для которой написана эта страница
   window.KartaPCVersion = EXPECTED;
   var OWN = /^(wf_|karta_)/;
 
@@ -29,8 +29,17 @@
 
   // ---------------------------------------------------------------- хранилище в файле на компьютере
 
-  var proto = Storage.prototype, setItem = proto.setItem, removeItem = proto.removeItem;
+  var proto = Storage.prototype, setItem = proto.setItem, removeItem = proto.removeItem, getItem = proto.getItem;
   var pendingKey = 'pc_pending_state', warning;
+  /* Большая сеть не помещается в память браузера (около 5 млн знаков на сайт). Такие значения
+   * держатся в памяти страницы, а на диск их пишет программа (data\state.json), как и остальные. */
+  var mem = {}, MEM_KEY = 'pc_mem_keys';
+  function memList() { try { return JSON.parse(getItem.call(localStorage, MEM_KEY) || '[]'); } catch (e) { return []; } }
+  function memMark() { try { setItem.call(localStorage, MEM_KEY, JSON.stringify(Object.keys(mem))); } catch (e) { /* ничего */ } }
+  function store(k, v) {
+    try { setItem.call(localStorage, k, v); if (k in mem) { delete mem[k]; memMark(); } }
+    catch (e) { try { removeItem.call(localStorage, k); } catch (e2) { /* ничего */ } mem[k] = v; memMark(); }
+  }
   function warnSave(failed) {
     if (!document.body) return;
     if (failed && !warning) {
@@ -42,7 +51,7 @@
     } else if (!failed && warning) { warning.remove(); warning = null; }
   }
   try {
-    var r = localStorage.getItem(pendingKey) ? null : request('GET', '/api/state');
+    var r = localStorage.getItem(pendingKey) && !memList().length ? null : request('GET', '/api/state');
     // Shared sessions keep personal preferences in each browser.
     if (!r) {
       var probe = request('GET', '/api/state');
@@ -51,7 +60,8 @@
     window.KartaSharedMode = window.KartaSharedMode || !!(r && r.getResponseHeader('X-Karta-Shared') === '1');
     if (window.KartaSharedMode && r && r.status === 200) {
       removeItem.call(localStorage, pendingKey);
-      ['karta_net', 'karta_author'].forEach(function (k) { setItem.call(localStorage, k, JSON.parse(r.responseText)[k]); });
+      var sv = JSON.parse(r.responseText);
+      ['karta_net', 'karta_author'].forEach(function (k) { store(k, sv[k]); });
       r = null;
     }
     if (r && r.status === 200 && r.getResponseHeader('X-State') !== 'none') {
@@ -61,7 +71,7 @@
         if (OWN.test(k) && !(k in saved)) drop.push(k);
       }
       drop.forEach(function (k) { removeItem.call(localStorage, k); });
-      Object.keys(saved).forEach(function (k) { setItem.call(localStorage, k, saved[k]); });
+      Object.keys(saved).forEach(function (k) { store(k, saved[k]); });
     }
   } catch (e) { /* программа не ответила — работаем с тем, что есть в браузере */ }
 
@@ -123,6 +133,7 @@
       var k = localStorage.key(i);
       if (OWN.test(k)) all[k] = localStorage.getItem(k);
     }
+    Object.keys(mem).forEach(function (k) { all[k] = mem[k]; });
     var ok = false;
     try {
       setItem.call(localStorage, pendingKey, '1');
@@ -133,13 +144,18 @@
   }
   proto.setItem = function (k, v) {
     if (passive && this === localStorage && OWN.test(k)) return;   // неактивное окно не трогает общие данные
+    if (this === localStorage && OWN.test(k)) { store(k, String(v)); persist(); return; }
     setItem.call(this, k, v);
-    if (this === localStorage && OWN.test(k)) persist();
   };
   proto.removeItem = function (k) {
     if (passive && this === localStorage && OWN.test(k)) return;
     removeItem.call(this, k);
+    if (this === localStorage && k in mem) { delete mem[k]; memMark(); }
     if (this === localStorage && OWN.test(k)) persist();
+  };
+  proto.getItem = function (k) {
+    if (this === localStorage && Object.prototype.hasOwnProperty.call(mem, k)) return mem[k];
+    return getItem.call(this, k);
   };
   document.addEventListener('DOMContentLoaded', function () {
     if (localStorage.getItem(pendingKey)) persist();
