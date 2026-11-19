@@ -2247,10 +2247,28 @@
       }
     });
   }
+  // ПК, совместный режим: сервер строже проверяет объекты, чем файл телефона или старой версии.
+  // Приводим файл к виду, который примет сервер (как карта и так показывает такие линии), иначе
+  // одна старая ВОЛС без «прокладки» не дала бы сохранить весь импорт.
+  function sharedSafe(net) {
+    var bad = 0;
+    Object.keys(net.objs).forEach(function (id) {
+      var o = net.objs[id];
+      if (o.f.deleted) return;
+      var pts = o.type === 'node' ? [o.f] : o.type === 'fiber' ? o.f.fnodes : o.f.points;
+      pts.forEach(function (q) {
+        q.lat = Number(q.lat); q.lng = Number(q.lng);
+        if (o.type !== 'node' && q.nid != null && typeof q.nid !== 'string') q.nid = String(q.nid);
+      });
+      if (o.type === 'fiber') o.f.lay = layOf(o);
+      if (o.type === 'radio' && pts.length !== 2) bad++;
+    });
+    return bad ? 'В файле есть радиолинии не из двух точек (' + bad + '). Общая карта не изменена.' : null;
+  }
   function received(name, text) {
     var p = null;
     try { p = JSON.parse(text); } catch (e) { p = null; }
-    var problem = check(p);
+    var problem = check(p) || (shared ? sharedSafe(p.data.net) : null);
     if (problem) { exNote = esc(problem); showExchange(); return; }
     var d = diff(p.data.net), mg = merge(p.data.net, true), c = counts(p.data.net), html = '<h3>Загрузить карту из файла?</h3>' +
       '<p class="muted">' + esc(name || 'файл') + (p.created ? ' · ' + when(p.created) : '') + (p.by ? ' · ' + esc(p.by) : '') +
