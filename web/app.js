@@ -525,6 +525,8 @@
     '.ap-lbl{position:absolute;left:50%;top:100%;transform:translateX(-50%);margin-top:2px;white-space:nowrap;font:600 11px/1.2 var(--font);' +
       'color:#1a1a1a;text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 3px #fff;pointer-events:none}',
     '.ap-z-lo .ap-lbl,.ap-z-lo2 .ap-llbl,.ap-lbl-off .ap-lbl{display:none}',
+    // холст линий и значков: у страницы товарища общее правило canvas{background;border} — оно закрывало карту
+    '.leaflet-pane canvas{background:none!important;border:0!important;border-radius:0!important;margin:0!important}',
     '.ap-llbl{position:absolute;transform:translate(-50%,-50%);white-space:nowrap;font:600 11px/1.3 var(--font);padding:1px 7px;border-radius:9px;' +
       'background:#fff;color:#b23c00;border:1px solid #e8590c;pointer-events:none}',
     '.ap-llbl.radio{color:#1565c0;border-color:#1565c0}',

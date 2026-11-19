@@ -59,6 +59,9 @@ with sync_playwright() as p:
         page.goto('http://127.0.0.1:%d/' % port); page.wait_for_function('window.KartaApp && window.KartaPC', timeout=120000)
         count = page.evaluate(ADD)
         assert count == TOTAL + 1, count
+        # холст линий не должен закрывать карту (общее правило canvas{background} у страницы товарища)
+        bg = page.evaluate("getComputedStyle(document.querySelector('.leaflet-overlay-pane canvas')).backgroundColor")
+        assert bg in ('rgba(0, 0, 0, 0)', 'transparent'), bg
         page.wait_for_function('!window.KartaPCSaving()', timeout=30000)
         disk = json.loads(json.load(open(os.path.join(folder, 'state.json'), encoding='utf-8'))['karta_net'])
         assert len(disk['objs']) == TOTAL + 1, len(disk['objs'])
