@@ -126,8 +126,23 @@
   }
   window.KartaPCPassive = function () { return passive; };
 
-  function persist() {
+  /* Изменился один ключ — на компьютер уходит только он (karta_view после каждого движения карты
+   * больше не тянет за собой всю сеть). Не дошло — следующий раз отправляется всё целиком. */
+  var fullNext = false;
+  function persist(k) {
     if (window.KartaSharedMode || window.KartaPCSwitching || passive) return;
+    if (k && !fullNext && !getItem.call(localStorage, pendingKey)) {
+      var one = {}, okOne = false;
+      one[k] = k in mem ? mem[k] : getItem.call(localStorage, k);
+      try {
+        setItem.call(localStorage, pendingKey, '1');
+        okOne = request('POST', '/api/state?patch=1', JSON.stringify(one)).status === 200;
+        if (okOne) removeItem.call(localStorage, pendingKey);
+      } catch (e) { okOne = false; }
+      if (!okOne) fullNext = true;
+      warnSave(!okOne);
+      return;
+    }
     var all = {};
     for (var i = 0; i < localStorage.length; i++) {
       var k = localStorage.key(i);
@@ -138,20 +153,20 @@
     try {
       setItem.call(localStorage, pendingKey, '1');
       ok = request('POST', '/api/state', JSON.stringify(all)).status === 200;
-      if (ok) removeItem.call(localStorage, pendingKey);
+      if (ok) { removeItem.call(localStorage, pendingKey); fullNext = false; }
     } catch (e) { /* повторим при следующем изменении или запуске */ }
     warnSave(!ok);
   }
   proto.setItem = function (k, v) {
     if (passive && this === localStorage && OWN.test(k)) return;   // неактивное окно не трогает общие данные
-    if (this === localStorage && OWN.test(k)) { store(k, String(v)); persist(); return; }
+    if (this === localStorage && OWN.test(k)) { store(k, String(v)); persist(k); return; }
     setItem.call(this, k, v);
   };
   proto.removeItem = function (k) {
     if (passive && this === localStorage && OWN.test(k)) return;
     removeItem.call(this, k);
     if (this === localStorage && k in mem) { delete mem[k]; memMark(); }
-    if (this === localStorage && OWN.test(k)) persist();
+    if (this === localStorage && OWN.test(k)) persist(k);
   };
   proto.getItem = function (k) {
     if (this === localStorage && Object.prototype.hasOwnProperty.call(mem, k)) return mem[k];

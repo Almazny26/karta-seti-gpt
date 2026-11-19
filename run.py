@@ -137,23 +137,52 @@ def fetch_elevations(dem, locs, online):
 
 # ------------------------------------------------------------------ данные приложения
 
+_alive_memo = []          # [(строка сети, число живых объектов)] — последние две
+
+
+def counted(karta_net):
+    """Число живых объектов сети; прошлое значение не пересчитывается (сеть 5 МБ разбирается раз)."""
+    from shared import alive_count
+    for s, n in _alive_memo:
+        if s is karta_net or s == karta_net:
+            return n
+    n = alive_count(karta_net)
+    _alive_memo.append((karta_net, n))
+    del _alive_memo[:-2]
+    return n
+
+
 class State:
     """Данные приложения (то, что на телефоне лежит в localStorage) — в файле data/state.json."""
 
     def __init__(self, data_dir):
         self.path = os.path.join(data_dir, "state.json")
         self.lock = threading.Lock()
+        self._cache = None      # (размер и время файла, данные): большую сеть не читать с диска на каждое сохранение
+
+    def _key(self):
+        st = os.stat(self.path)
+        return (st.st_size, st.st_mtime_ns, st.st_ino)
 
     def load(self):
         with self.lock:
             if not os.path.exists(self.path):
                 return None
+            key = self._key()
+            if self._cache and self._cache[0] == key:
+                return dict(self._cache[1])
             with open(self.path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+            self._cache = (key, data) if isinstance(data, dict) else None
+            return dict(data) if isinstance(data, dict) else data
 
     def save(self, data):
         with self.lock:
             atomic_write(self.path, json.dumps(data, ensure_ascii=False))
+            try:
+                self._cache = (self._key(), dict(data)) if isinstance(data, dict) else None
+            except OSError:
+                self._cache = None
 
     def read_bytes(self):
         """Содержимое файла под той же блокировкой, что и запись (для резервной копии)."""
@@ -1238,13 +1267,22 @@ def make_handler(app):
                 data = self._body()
                 if getattr(app, 'restarting', False):
                     raise HttpError(503, 'Программа переключает режим подключения')
-                if not isinstance(data, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in data.items()):
+                patch = 'patch=1' in (urllib.parse.urlsplit(self.path).query or '')
+                if not isinstance(data, dict) or not all(isinstance(k, str) and (isinstance(v, str) or (patch and v is None)) for k, v in data.items()):
                     raise HttpError(400, "Неверные данные")
                 # массовое удаление (замена карты файлом, откат) — сначала снимок прежней карты
-                from shared import alive_count, write_snapshot
+                from shared import write_snapshot
                 old = app.state.load() or {}
+                if patch:       # 3.5: изменились отдельные ключи (null — ключ удалён)
+                    merged = dict(old)
+                    for k, v in data.items():
+                        if v is None:
+                            merged.pop(k, None)
+                        else:
+                            merged[k] = v
+                    data = merged
                 if old.get("karta_net") and old.get("karta_net") != data.get("karta_net") and \
-                        alive_count(data.get("karta_net", "")) <= alive_count(old["karta_net"]) - 5:
+                        counted(data.get("karta_net", "")) <= counted(old["karta_net"]) - 5:
                     try:
                         write_snapshot(os.path.join(app.data_dir, "backups"), old, "mass")
                     except OSError as e:
