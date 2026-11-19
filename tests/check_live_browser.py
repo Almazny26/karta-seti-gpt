@@ -11,6 +11,7 @@ import http.cookiejar
 import json
 import os
 import socket
+import shutil
 import statistics
 import subprocess
 import sys
@@ -111,9 +112,18 @@ EDIT = '''(code) => {
 
 async def main():
     folder = tempfile.mkdtemp(prefix='karta-live-')
-    port = free_port()
-    srv = Server(folder, port)
+    srv = Server(folder, free_port())
     srv.start()
+    try:
+        await scenario(folder, srv)
+    finally:
+        if srv.proc and srv.proc.poll() is None:
+            srv.kill9()
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+async def scenario(folder, srv):
+    port = srv.port
     local = 'http://127.0.0.1:%d' % port
     remote = 'http://%s:%d' % (lan_ip(), port)
     owner_http = Http(local)
