@@ -43,7 +43,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(ROOT, "web")
 HOST = "127.0.0.1"
 PORT = 8793   # стандартный порт; другой — «--port N», он запоминается в data/remote-access.json
-VERSION = "3.4.6"
+VERSION = "3.5.0"
 
 mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("application/json", ".json")
@@ -1340,8 +1340,15 @@ def make_handler(app):
                     inject += '\n<script src="shared.js?v=%s"></script>' % VERSION
                 inject += '\n<script src="access.js?v=%s"></script>' % VERSION
                 html = html.replace(tag, inject, 1) if tag in html else html.replace("<head>", "<head>\n" + inject, 1)
-                style_tag='<script src="vendor/offline-style.js"></script>'
-                html=html.replace(style_tag,style_tag+'\n<script src="vendor/offline-style-pc.js?v=%s"></script>\n<script src="vendor/coverage-pc.js?v=%s"></script>' % (VERSION, VERSION),1)
+                # подробная схема и граница левобережья — общие с приложением (3.5): в index.html они уже есть,
+                # ПК лишь добавляет версию, чтобы после обновления не взять старое из кэша браузера
+                for extra in ('vendor/offline-style-pc.js', 'vendor/coverage-pc.js'):
+                    plain = '<script src="%s"></script>' % extra
+                    if plain in html:
+                        html = html.replace(plain, '<script src="%s?v=%s"></script>' % (extra, VERSION), 1)
+                    else:
+                        style_tag = '<script src="vendor/offline-style.js"></script>'
+                        html = html.replace(style_tag, style_tag + '\n<script src="%s?v=%s"></script>' % (extra, VERSION), 1)
                 # значок окна — тот же, что у приложения на телефоне
                 html = html.replace("</head>", '<link rel="stylesheet" href="desktop.css?v=%s">\n' % VERSION + '<link rel="icon" type="image/png" sizes="192x192" href="icon.png">\n'
                                     '<link rel="shortcut icon" href="favicon.ico">\n</head>', 1)
