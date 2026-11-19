@@ -21,4 +21,8 @@ web/tiles/
 web/tiles.zip
 *.keystore
 *.jks
-.github/workflows/build-apk.yml
+
+# Local project history and maintenance notes
+CLAUDE.md
+AUDIT*.md
+Очистка папки — список.txt
