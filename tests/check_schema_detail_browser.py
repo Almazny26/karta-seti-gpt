@@ -20,7 +20,7 @@ with tempfile.TemporaryDirectory() as folder:
     base='http://127.0.0.1:%s'%server.server_address[1]
     try:
         with sync_playwright() as p:
-            browser=p.chromium.launch(executable_path=r'C:\Program Files\Google\Chrome\Application\chrome.exe',headless=True,args=['--enable-webgl','--use-angle=swiftshader','--enable-unsafe-swiftshader'])
+            browser=p.chromium.launch(executable_path=os.environ.get('KARTA_CHROME') or r'C:\Program Files\Google\Chrome\Application\chrome.exe',headless=True,args=['--enable-webgl','--use-angle=swiftshader','--enable-unsafe-swiftshader'])
             context=browser.new_context(viewport=dict(width=1366,height=900));outbound=[]
             def route(r):
                 if r.request.url.startswith((base,'data:')):r.continue_()

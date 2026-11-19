@@ -184,10 +184,20 @@
     if (shared) {
       if (!sharedUndo.length || tool || mode !== 'edit' || shared.hasPending()) return;
       var changes = sharedUndo[sharedUndo.length - 1];
-      if (changes.some(function (c) { return !same(db.objs[c.id] || null, c.after); })) { toast('Объекты уже изменены другим пользователем. Отмена недоступна'); return; }
+      // сравниваются поля объекта: отметки времени сервер ставит заново и после нашей же отмены
+      if (changes.some(function (c) { var o = db.objs[c.id]; return !same(o ? o.f : null, c.after ? c.after.f : null); })) { toast('Объекты уже изменены другим пользователем. Отмена недоступна'); return; }
       changes.forEach(function (c) { if (c.before) db.objs[c.id] = copy(c.before); else delete db.objs[c.id]; });
       db = shared.commit(db);
-      if (!shared.hasPending()) { sharedUndo.pop(); sharedLast = copy(db); }
+      if (!shared.hasPending()) {
+        sharedUndo.pop(); sharedLast = copy(db);
+        // шаги могли перекрыться (правка во время отправки предыдущей): у предыдущего шага конец —
+        // там, где начинался отменённый, иначе вторая отмена считала бы объект чужой правкой
+        var prev = sharedUndo[sharedUndo.length - 1];
+        if (prev) prev.forEach(function (p) {
+          var c = changes.filter(function (x) { return x.id === p.id; })[0];
+          if (c && same(p.after ? p.after.f : null, c.after ? c.after.f : null)) p.after = db.objs[p.id] ? copy(db.objs[p.id]) : null;
+        });
+      }
       document.body.classList.toggle('ap-canundo', sharedUndo.length > 0);
       sel = null; closeSheet(); refresh();
       return;
@@ -1812,12 +1822,13 @@
   function quickNode(ll) {
     var t = tool;
     if (!t || t.kind !== 'node') return;
-    var n = S.snap ? nearNode(map.latLngToContainerPoint(ll), 16) : null;
-    if (n) { toast('Здесь уже есть узел «' + (n.f.name || '') + '»'); return; }
+    // случайное двойное нажатие не ставит второй узел на то же место
+    var lastO = t.last && get(t.last.id);
+    if (lastO && Date.now() - t.last.at < 700 && map.latLngToContainerPoint(ll).distanceTo(map.latLngToContainerPoint([lastO.f.lat, lastO.f.lng])) < 20) return;
     var name = nextNodeName(t.nodeKind);
     var o = put(null, 'node', { name: name, kind: t.nodeKind, state: 'работает', lat: +ll.lat.toFixed(6), lng: +ll.lng.toFixed(6) });
     buzz();
-    t.last = { id: o.id, name: name };
+    t.last = { id: o.id, name: name, at: Date.now() };
     renderTool();
     toast('Узел «' + name + '» добавлен');
   }

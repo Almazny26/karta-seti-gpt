@@ -1,4 +1,5 @@
 ﻿import sys,os,json,tempfile,threading,time
+import os
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 (ROOT/'.audit').mkdir(exist_ok=True)
@@ -18,7 +19,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.audit') as tmp:
  base='http://127.0.0.1:%d'%server.server_address[1]
  try:
   with sync_playwright() as p:
-   browser=p.chromium.launch(executable_path=r'C:\Program Files\Google\Chrome\Application\chrome.exe',headless=True,args=['--enable-webgl','--use-angle=swiftshader','--enable-unsafe-swiftshader'])
+   browser=p.chromium.launch(executable_path=os.environ.get('KARTA_CHROME') or r'C:\Program Files\Google\Chrome\Application\chrome.exe',headless=True,args=['--enable-webgl','--use-angle=swiftshader','--enable-unsafe-swiftshader'])
    ctx=browser.new_context(viewport={'width':390,'height':844},is_mobile=True,has_touch=True,device_scale_factor=2)
    ctx.route('**/*',lambda r:r.continue_() if r.request.url.startswith(base) or r.request.url.startswith('data:') else r.abort())
    page=ctx.new_page(); errors=[];page.on('pageerror',lambda e:errors.append(str(e)))

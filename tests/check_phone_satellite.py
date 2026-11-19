@@ -1,4 +1,5 @@
 """Verify the mobile branch retains satellite/hybrid while desktop resets to schema."""
+import os
 import struct
 import sys
 import tempfile
@@ -20,7 +21,7 @@ with tempfile.TemporaryDirectory() as folder:
     base='http://127.0.0.1:%s'%server.server_address[1]
     try:
         with sync_playwright() as p:
-            browser=p.chromium.launch(executable_path=r'C:\Program Files\Google\Chrome\Application\chrome.exe',headless=True)
+            browser=p.chromium.launch(executable_path=os.environ.get('KARTA_CHROME') or r'C:\Program Files\Google\Chrome\Application\chrome.exe',headless=True)
             ctx=browser.new_context(viewport=dict(width=390,height=844),is_mobile=True,has_touch=True)
             ctx.add_init_script('localStorage.setItem("karta_author","Проверка");localStorage.setItem("karta_map","sat");')
             def route(r):

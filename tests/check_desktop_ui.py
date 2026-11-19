@@ -16,7 +16,7 @@ with tempfile.TemporaryDirectory() as folder:
     base='http://127.0.0.1:%s'%server.server_address[1]
     try:
         with sync_playwright() as p:
-            browser=p.chromium.launch(executable_path=r'C:\Program Files\Google\Chrome\Application\chrome.exe',headless=True,args=['--enable-webgl','--use-angle=swiftshader','--enable-unsafe-swiftshader'])
+            browser=p.chromium.launch(executable_path=os.environ.get('KARTA_CHROME') or r'C:\Program Files\Google\Chrome\Application\chrome.exe',headless=True,args=['--enable-webgl','--use-angle=swiftshader','--enable-unsafe-swiftshader'])
             context=browser.new_context(viewport=dict(width=1366,height=768));outbound=[];errors=[];problems=[]
             context.add_init_script('localStorage.setItem("karta_set",JSON.stringify({ui:1.3,pcPanel:460}));localStorage.setItem("karta_view","[46.64,32.62,18]")')
             def route(r):
@@ -55,6 +55,7 @@ with tempfile.TemporaryDirectory() as folder:
                 page.locator('#apUsers').click();overflow(str(width)+' users','#apUsersDialog');page.keyboard.press('Escape')
             page.set_viewport_size(dict(width=1366,height=768))
             page.evaluate('KartaApp.setMode("edit");KartaApp.startNode();map.fire("click",{latlng:L.latLng(46.64,32.62),containerPoint:map.latLngToContainerPoint([46.64,32.62])})')
+            page.locator('#apSheet [data-a=edit]').click()   # 3.5: узел ставится сразу, название — правкой
             page.locator('#apf0').fill('Тестовый узел');page.locator('#apOk').click()
             oid=page.evaluate('Object.keys(KartaNet.data().objs)[0]')
             page.reload();page.wait_for_function('(id)=>window.KartaNet && KartaNet.data().objs[id]',arg=oid)

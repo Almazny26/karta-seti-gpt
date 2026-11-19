@@ -1,3 +1,4 @@
+import time
 """End-to-end shared map checks in independent authenticated browser contexts."""
 import copy
 import json
@@ -27,7 +28,7 @@ with tempfile.TemporaryDirectory() as folder:
     errors = []
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(executable_path=r'C:\Program Files\Google\Chrome\Application\chrome.exe', headless=True,
+            browser = p.chromium.launch(executable_path=os.environ.get('KARTA_CHROME') or r'C:\Program Files\Google\Chrome\Application\chrome.exe', headless=True,
                 args=['--enable-webgl','--use-angle=swiftshader','--enable-unsafe-swiftshader'])
             pages = {}
             for login in ['admin','ivan','petr','watch']:
@@ -46,6 +47,7 @@ with tempfile.TemporaryDirectory() as folder:
             def add(page, name, lat):
                 page.evaluate('KartaApp.setMode("edit"); KartaApp.startNode()')
                 page.evaluate('(lat)=>map.fire("click",{latlng:L.latLng(lat,33.51),containerPoint:map.latLngToContainerPoint([lat,33.51])})', lat)
+                page.locator('#apSheet [data-a=edit]').click()   # 3.5: узел ставится сразу, название — правкой
                 page.locator('#apf0').fill(name)
                 page.locator('#apOk').click()
                 return page.evaluate('(name)=>Object.values(KartaNet.data().objs).find(o=>o.f.name===name).id', name)
@@ -59,7 +61,15 @@ with tempfile.TemporaryDirectory() as folder:
             viewer.evaluate('KartaApp.setMode("edit")')
             assert viewer.evaluate('KartaApp.state().mode') == 'view'
             # Undo Ivan's operation must keep Petr's unrelated node.
+            # 3.5: узел ставится одним нажатием, название — отдельная правка: две отмены
             a.keyboard.press('Control+z')
+            a.wait_for_function('(id)=>KartaNet.data().objs[id].f.name!=="Узел Ивана"', arg=id_a)
+            for _ in range(100):
+                if app.shared.net()['objs'][id_a]['f']['name'] != 'Узел Ивана': break
+                time.sleep(.1)
+            a.keyboard.press('Control+z')
+            a.wait_for_function('(id)=>KartaNet.data().objs[id].f.deleted', arg=id_a)
+            time.sleep(1)
             assert app.shared.net()['objs'][id_a]['f']['deleted']
             assert not app.shared.net()['objs'][id_b]['f'].get('deleted')
 
