@@ -267,6 +267,7 @@
     if (!window.KartaPC && current !== 'off' && !hasSat()) KartaMap.note(up ? 'Связь появилась — снимки снова загружаются' : 'Нет связи — показана офлайн-схема');
     kindsUi();
     sync();
+    if (window.KartaApp && KartaApp.mapChanged) KartaApp.mapChanged();
   }
   window.__kartaNet = setNet;
   window.addEventListener('online', function () { if (!(kf && kf.networkUp)) setNet(true); });
@@ -412,6 +413,7 @@
 
   window.KartaMap = {
     info: function () { return { files: info.files, gl: webgl(), drawn: !!gl }; },
+    photo: function () { return shown() !== 'off'; },          // под линиями снимки — линиям нужна тёмная тень
     glMap: function () { return gl; },
     reload: loadVec,
     note: function () {},                       // app.js подставляет всплывающее сообщение
@@ -437,6 +439,7 @@
     $('mapSat').classList.toggle('on', current === 'sat');
     $('mapHyb').classList.toggle('on', current === 'hyb');
     try { localStorage.setItem(KIND, current); } catch (e) { /* не важно */ }
+    if (window.KartaApp && KartaApp.mapChanged) KartaApp.mapChanged();
   };
 
   // у приложения на масштабе больше 11 было сообщение «офлайн-карта до зума 11» — теперь не нужно

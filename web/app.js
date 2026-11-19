@@ -1061,8 +1061,9 @@
         if (!cur || cur.lay !== lay[i]) { cur = { lay: lay[i], ll: [ll[i]] }; runs.push(cur); }
         cur.ll.push(ll[i + 1]);
       }
-      // обводка: тёмная тень (видно на снимках) и белая подложка (видно на схеме)
-      add(L.polyline(ll, { renderer: canvas, color: '#0b1a2a', weight: ((isSel ? 11 : 9) * heavy + 1.5) * w, opacity: .3, interactive: false, lineJoin: 'round' }));
+      // обводка: белая подложка (видно на схеме); тёмная тень — только над снимками и у выделенной
+      // (лишний проход по холсту на каждую линию заметно замедлял большие сети)
+      if (isSel || (window.KartaMap && KartaMap.photo && KartaMap.photo())) add(L.polyline(ll, { renderer: canvas, color: '#0b1a2a', weight: ((isSel ? 11 : 9) * heavy + 1.5) * w, opacity: .3, interactive: false, lineJoin: 'round' }));
       add(L.polyline(ll, { renderer: canvas, color: '#fff', weight: (isSel ? 10 : 8) * heavy * w, opacity: .92, interactive: false, lineJoin: 'round' }));
       runs.forEach(function (r) {
         var s = LAY[r.lay] || LAY.air;
@@ -2613,6 +2614,7 @@
       refresh();
       if (view && view.k === 'card') renderView();
     },
+    mapChanged: function () { gen++; refresh(); },
     addCross: function () { if ($('apAddPt')) $('apAddPt').click(); }, state: function () { return { mode: mode, tool: tool, sel: sel, view: view }; } };
 
   // ================================================================== настройки (окно)
