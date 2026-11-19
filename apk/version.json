@@ -1,9 +1,5 @@
 {
-  "versionCode": 37,
-  "versionName": "2.0.37-gpt",
-  "commit": "d5efd67ae3068c57724e429d63cf5a32550a3df7",
-  "built": "2026-11-14T17:06:42.925873+00:00",
-  "source": "local GPT working tree",
-  "dirty": true,
-  "sha256": "f83b63b62c2146512a9ceb1dc5f95c86df7eaa081ec8a5bbdf649acf208f2887"
+  "versionCode": 350000,
+  "versionName": "3.5.0",
+  "note": "3.5.0: APK со вшитой офлайн-схемой (~165 МБ) собирает GitHub Actions «Сборка APK» и выкладывает в релиз apk-3.5.0.N; после сборки здесь будут versionCode 350000+N, ссылка url и sha256. apk/karta-seti.apk в git — старая сборка 2.0.37, сборка 3.5 её удаляет."
 }
