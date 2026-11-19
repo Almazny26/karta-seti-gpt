@@ -37,6 +37,11 @@
   function memList() { try { return JSON.parse(getItem.call(localStorage, MEM_KEY) || '[]'); } catch (e) { return []; } }
   function memMark() { try { setItem.call(localStorage, MEM_KEY, JSON.stringify(Object.keys(mem))); } catch (e) { /* ничего */ } }
   function store(k, v) {
+    if (v.length > 2000000) {     // заведомо не поместится: не тратить время на попытку записи 5 МБ
+      if (!(k in mem)) { try { removeItem.call(localStorage, k); } catch (e) { /* ничего */ } }
+      var had = k in mem; mem[k] = v; if (!had) memMark();
+      return;
+    }
     try { setItem.call(localStorage, k, v); if (k in mem) { delete mem[k]; memMark(); } }
     catch (e) { try { removeItem.call(localStorage, k); } catch (e2) { /* ничего */ } mem[k] = v; memMark(); }
   }
@@ -128,16 +133,46 @@
 
   /* Изменился один ключ — на компьютер уходит только он (karta_view после каждого движения карты
    * больше не тянет за собой всю сеть). Не дошло — следующий раз отправляется всё целиком. */
-  var fullNext = false;
+  var fullNext = false, bigBusy = false, bigNext = null;
+  /* Большая сеть (несколько МБ) уходит в фоне: синхронная отправка останавливала страницу почти на
+   * секунду после каждой точки. Пока запрос в пути, новые правки ждут и уходят одним следующим
+   * запросом (последнее состояние). Не дошло — следующая запись отправит всё целиком. */
+  function sendBig(k) {
+    if (bigBusy) { bigNext = k; return; }
+    bigBusy = true;
+    try { setItem.call(localStorage, pendingKey, '1'); } catch (e) { /* ничего */ }
+    var one = {}, x = new XMLHttpRequest();
+    one[k] = mem[k];
+    x.open('POST', '/api/state?patch=1', true);
+    x.setRequestHeader('Content-Type', 'application/json');
+    x.onloadend = function () {
+      var ok = x.status === 200;
+      bigBusy = false;
+      if (!ok) fullNext = true;
+      warnSave(!ok);
+      if (bigNext != null) { var n = bigNext; bigNext = null; if (ok) sendBig(n); else persist(); }
+      else if (!ok) persist();
+      else if (!fullNext) try { removeItem.call(localStorage, pendingKey); } catch (e) { /* ничего */ }
+    };
+    x.send(JSON.stringify(one));
+  }
+  window.addEventListener('pagehide', function () {   // окно закрывают, а запись ещё в пути
+    if (!(bigBusy || bigNext != null) || !navigator.sendBeacon) return;
+    var all = {};
+    Object.keys(mem).forEach(function (k) { all[k] = mem[k]; });
+    try { navigator.sendBeacon('/api/state?patch=1', new Blob([JSON.stringify(all)], { type: 'application/json' })); } catch (e) { /* ничего */ }
+  });
+  window.KartaPCSaving = function () { return bigBusy || bigNext != null; };
   function persist(k) {
     if (window.KartaSharedMode || window.KartaPCSwitching || passive) return;
-    if (k && !fullNext && !getItem.call(localStorage, pendingKey)) {
+    if (k && k in mem && !fullNext) { sendBig(k); return; }
+    if (k && !fullNext && (bigBusy || !getItem.call(localStorage, pendingKey))) {
       var one = {}, okOne = false;
       one[k] = k in mem ? mem[k] : getItem.call(localStorage, k);
       try {
         setItem.call(localStorage, pendingKey, '1');
         okOne = request('POST', '/api/state?patch=1', JSON.stringify(one)).status === 200;
-        if (okOne) removeItem.call(localStorage, pendingKey);
+        if (okOne && !bigBusy && bigNext == null) removeItem.call(localStorage, pendingKey);
       } catch (e) { okOne = false; }
       if (!okOne) fullNext = true;
       warnSave(!okOne);
@@ -149,6 +184,7 @@
       if (OWN.test(k)) all[k] = localStorage.getItem(k);
     }
     Object.keys(mem).forEach(function (k) { all[k] = mem[k]; });
+    if (bigBusy && Object.keys(mem).length) bigNext = Object.keys(mem)[0];   // фоновая запись старее этой — повторить после неё
     var ok = false;
     try {
       setItem.call(localStorage, pendingKey, '1');
