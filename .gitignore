@@ -1,0 +1,24 @@
+# данные сервера конкретного ПК (база, настройки, журнал) — в репозиторий не попадают
+data/
+data-demo/
+__pycache__/
+*.pyc
+*.zip
+# сборка Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+# ключ подписи APK хранится в секрете GitHub KEYSTORE_B64, в репозиторий не кладётся
+android/netmap.keystore
+# офлайн-карта районов (большой файл, у каждого скачивается программой или передаётся файлом)
+map/
+*.pmtiles
+apk/offline-materials/
+.audit/
+# Legacy raster assets are retained locally for Android; desktop does not use them.
+web/tiles/
+web/tiles.zip
+*.keystore
+*.jks
+.github/workflows/build-apk.yml

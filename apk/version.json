@@ -1,0 +1,9 @@
+{
+  "versionCode": 37,
+  "versionName": "2.0.37-gpt",
+  "commit": "d5efd67ae3068c57724e429d63cf5a32550a3df7",
+  "built": "2026-11-14T17:06:42.925873+00:00",
+  "source": "local GPT working tree",
+  "dirty": true,
+  "sha256": "f83b63b62c2146512a9ceb1dc5f95c86df7eaa081ec8a5bbdf649acf208f2887"
+}
