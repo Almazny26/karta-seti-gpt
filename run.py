@@ -43,7 +43,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(ROOT, "web")
 HOST = "127.0.0.1"
 PORT = 8793   # стандартный порт; другой — «--port N», он запоминается в data/remote-access.json
-VERSION = "3.5.0"
+VERSION = "3.5.1"
 
 mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("application/json", ".json")
@@ -1337,8 +1337,16 @@ def make_handler(app):
                 got = app.offline.tile(int(m.group(1)), int(m.group(2)), int(m.group(3)))
                 if got is None:
                     return self._send(204, b"", "application/x-protobuf", {"Cache-Control": "no-cache"})
-                return self._send(200, got[0], "application/x-protobuf",
-                                  {"Cache-Control": "no-cache", "Content-Encoding": "gzip"} if got[1] else {"Cache-Control": "no-cache"})
+                # 3.5.1: плитка уходит распакованной. С «Content-Encoding: gzip» её на некоторых рабочих ПК
+                # портили антивирусы и прокси, проверяющие трафик (схема не рисовалась, ошибок не видно)
+                data = got[0]
+                if got[1]:
+                    try:
+                        data = gzip.decompress(data)
+                    except (OSError, EOFError):
+                        return self._send(204, b"", "application/x-protobuf", {"Cache-Control": "no-cache"})
+                return self._send(200, data, "application/x-protobuf",
+                                  {"Cache-Control": "no-cache"})
             if rel.startswith("vendor/fonts/") and rel.endswith(".pbf") and not os.path.isfile(os.path.join(WEB, rel)):
                 # букв этого диапазона в наборе нет — пустой ответ, иначе подписи на плитке не рисуются
                 return self._send(200, b"", "application/x-protobuf", {"Cache-Control": "max-age=86400"})
@@ -1496,7 +1504,14 @@ def backup_once(data_dir, state=None, hourly_keep=72, daily_keep=30, now=None):
             made.append(h)
         d = "%s-%s.json" % (prefix, time.strftime("%Y-%m-%d", now))
         if not os.path.exists(os.path.join(folder, d)):
-            atomic_write(os.path.join(folder, d), data)
+            # первая копия дня обычно совпадает с только что сделанной копией часа: жёсткая ссылка
+            # вместо второго файла (место на диске одно; в списке «Копии» показывается одной строкой)
+            try:
+                if h not in made:
+                    raise OSError
+                os.link(os.path.join(folder, h), os.path.join(folder, d))
+            except OSError:
+                atomic_write(os.path.join(folder, d), data)
             made.append(d)
         names = sorted(os.listdir(folder))
         for pattern, keep in ((hourly, hourly_keep), (daily, daily_keep)):

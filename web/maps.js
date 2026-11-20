@@ -74,8 +74,6 @@
     };
     layer._tileOnError = function (done, tile, e) {
       var c = tile._kc, up = (tile._kup || 0) + 1, z = c && c.z - up;
-      // там, где есть загруженные снимки района, растянутая мелкая плитка хуже них — пусть видны они
-      if (c && this._kSat && z < 15 && satAt(c)) up = 9;
       if (!c || up > 5 || z < 1) return L.TileLayer.prototype._tileOnError.call(this, done, tile, e);
       tile._kup = up;
       var k = 1 << up, x = c.x >> up, y = c.y >> up, ts = this.getTileSize().x, part = ts / k;
@@ -90,7 +88,6 @@
     };
   }
   [osm, sat, hybSat].forEach(fallback);
-  sat._kSat = hybSat._kSat = true;
   offlineTiles.setZIndex(0); osm.setZIndex(1); sat.setZIndex(3); hybSat.setZIndex(3); hybNames.setZIndex(4);
 
   // ---------------------------------------------------------------- поворот двумя пальцами — не сразу
@@ -142,27 +139,22 @@
 
   // ---------------------------------------------------------------- офлайн-карта районов (MapLibre GL)
 
-  /* Файлы районов: <район>.pmtiles — схема (векторные плитки), <район>-sat.pmtiles — снимки
-   * Sentinel-2 (10 м на точку, масштаб до 14). И то и другое рисует одна карта MapLibre:
-   * «Схема» — вектор, «Спутник» — снимки, «Гибрид» — снимки, дороги и подписи схемы поверх. */
+  /* Файлы схемы (.pmtiles, векторные плитки): в приложении — вшитая схема левобережья, на ПК — папка map.
+   * В «Спутнике» и «Гибриде» MapLibre остаётся под снимками из интернета: пока они не пришли, видна схема. */
   function inBox(f, lat, lng) { var b = f.bounds || []; return lng >= b[0] && lng <= b[2] && lat >= b[1] && lat <= b[3]; }
   function files(kind) { return info.files.filter(function (f) { return (f.kind === 'sat') === (kind === 'sat'); }); }
-  function hasSat() { return files('sat').length > 0; }
   function hasVec() { return files('map').length > 0; }
-  /* плитка {x, y, z} попадает в район, для которого загружены снимки */
-  function satAt(c) {
-    var n = Math.pow(2, c.z), lng = (c.x + 0.5) / n * 360 - 180, lat = Math.atan(Math.sinh(Math.PI * (1 - 2 * (c.y + 0.5) / n))) * 180 / Math.PI;
-    return files('sat').some(function (f) { return inBox(f, lat, lng); });
-  }
-
   var kf = window.KartaFiles, bridge = !!(kf && kf.mapTile);
+  var GLKEY = 'karta_gl';      // 'off' — схема всегда упрощённая, без WebGL (выбрано в «Проверке карты»)
   var gl = null, info = { files: [] }, infoLoaded = false, key = '', schema = 'auto', glOk = null;
   var current = window.KartaPC ? 'off' : localStorage.getItem(KIND) || 'off'; // ПК — только схема; Android сохраняет выбор подложки.
   function webgl() {
     if (glOk == null) {
       try {
         var c = document.createElement('canvas');
-        glOk = !!(window.maplibregl && window.KartaStyle && (c.getContext('webgl2') || c.getContext('webgl')));
+        var forced = false;
+        try { forced = localStorage.getItem(GLKEY) === 'off' || /[?&]nogl=1/.test(location.search); } catch (e) { forced = false; }
+        glOk = !forced && !!(window.maplibregl && window.KartaStyle && c.getContext('webgl2'));   // MapLibre 5 работает только с WebGL 2
       } catch (e) { glOk = false; }
     }
     return glOk;
@@ -195,16 +187,11 @@
       if (!s) return Promise.resolve(new ArrayBuffer(0));
       return fetch('data:application/octet-stream;base64,' + s).then(function (r) { return r.arrayBuffer(); }, function () { return b64(s); });
     }
-    var BLANK_BUF = b64(BLANK.split(',')[1]);
     maplibregl.addProtocol('karta', function (params, ac) {
       var u = params.url, m, got;
       if (kf.tileAsync) {
         if ((m = /^karta:\/\/t\/(\d+)\/(\d+)\/(\d+)/.exec(u))) got = ask('t', +m[1], +m[2], +m[3], '', ac);
-        else if ((m = /^karta:\/\/s\/(\d+)\/(\d+)\/(\d+)/.exec(u))) {
-          return ask('s', +m[1], +m[2], +m[3], '', ac).then(function (s) {
-            return s ? bytes(s).then(function (d) { return { data: d }; }) : { data: BLANK_BUF.slice(0) };     // снимка нет — прозрачная плитка
-          });
-        } else if ((m = /^karta:\/\/f\/(.+)\/(\d+-\d+)$/.exec(u))) got = ask('f', 0, 0, 0, 'vendor/fonts/' + decodeURIComponent(m[1]) + '/' + m[2] + '.pbf', ac);
+        else if ((m = /^karta:\/\/f\/(.+)\/(\d+-\d+)$/.exec(u))) got = ask('f', 0, 0, 0, 'vendor/fonts/' + decodeURIComponent(m[1]) + '/' + m[2] + '.pbf', ac);
         else got = Promise.resolve('');
         return got.then(bytes).then(function (d) { return { data: d }; });
       }
@@ -212,10 +199,7 @@
       var s = '';
       try {
         if ((m = /^karta:\/\/t\/(\d+)\/(\d+)\/(\d+)/.exec(u))) s = kf.mapTile(+m[1], +m[2], +m[3]);
-        else if ((m = /^karta:\/\/s\/(\d+)\/(\d+)\/(\d+)/.exec(u))) {
-          s = kf.satTile ? kf.satTile(+m[1], +m[2], +m[3]) : '';
-          if (!s) return Promise.resolve({ data: BLANK_BUF.slice(0) });
-        } else if ((m = /^karta:\/\/f\/(.+)\/(\d+-\d+)$/.exec(u))) s = kf.asset('vendor/fonts/' + decodeURIComponent(m[1]) + '/' + m[2] + '.pbf');
+        else if ((m = /^karta:\/\/f\/(.+)\/(\d+-\d+)$/.exec(u))) s = kf.asset('vendor/fonts/' + decodeURIComponent(m[1]) + '/' + m[2] + '.pbf');
       } catch (e) { s = ''; }
       return Promise.resolve({ data: s ? b64(s) : new ArrayBuffer(0) });
     });
@@ -225,29 +209,18 @@
     list.forEach(function (f) { var x = f.bounds || [-180, -85, 180, 85]; b = [Math.min(b[0], x[0]), Math.min(b[1], x[1]), Math.max(b[2], x[2]), Math.max(b[3], x[3])]; });
     return b;
   }
-  var HYB = { minor: .35, major: .5, hw: .6 };          // дороги схемы поверх снимков — полупрозрачные
   function style() {
     var theme = document.body.classList.contains('dark') ? 'dark' : 'light';
     var palette = richStyle() ? window.KartaStylePC : window.KartaStyle;
     var s = JSON.parse(JSON.stringify(palette[theme]));
-    var cur = shown(), vec = hasVec(), img = hasSat() && cur !== 'off', all = s.layers;
+    var cur = shown(), vec = hasVec(), all = s.layers;
     s.glyphs = bridge ? 'karta://f/{fontstack}/{range}' : location.origin + '/vendor/fonts/{fontstack}/{range}.pbf';
     s.sources.p.tiles = [bridge ? 'karta://t/{z}/{x}/{y}?' + key : location.origin + '/omap/{z}/{x}/{y}.mvt?v=' + key];
     if (vec) { s.sources.p.bounds = union(files('map')); s.sources.p.maxzoom = Math.max.apply(null,files('map').map(function (f) { return f.maxzoom || 15; })); }
     else { delete s.sources.p; all = []; }
-    if (img) {
-      s.sources.s = { type: 'raster', tileSize: 256, minzoom: 0, maxzoom: Math.max.apply(null,files('sat').map(function (f) { return f.maxzoom || 14; })), bounds: union(files('sat')),
-        tiles: [bridge ? 'karta://s/{z}/{x}/{y}?' + key : location.origin + '/osat/{z}/{x}/{y}.jpg?v=' + key] };
-      // «Гибрид»: поверх снимков — дороги и подписи схемы; «Спутник»: только снимки
-      all = cur === 'hyb' ? all.filter(function (l) { return l.type === 'symbol' || HYB[l.id]; }) : [];
-      all.forEach(function (l) {
-        if (HYB[l.id]) { l.paint = l.paint || {}; l.paint['line-opacity'] = HYB[l.id]; }
-        if (l.type === 'symbol') { l.paint = l.paint || {}; l.paint['text-halo-width'] = 1.8; }
-      });
-      all.unshift({ id: 'sat', type: 'raster', source: 's', paint: { 'raster-fade-duration': 0 } });
-    }
-    s.layers = all;
-    if (richStyle() && window.KartaCoverage) {
+    if (window.__kartaTestBadLayer) all.splice(3, 0, window.__kartaTestBadLayer);   // только для проверки самолечения
+    s.layers = all.filter(function (l) { return !skipLayers[l.id]; });
+    if (richStyle() && window.KartaCoverage && !skipLayers['coverage-mask']) {
       s.sources.coverage = {type:'geojson',data:{type:'Feature',properties:{},geometry:KartaCoverage.mask},tolerance:0};
       s.layers.push({id:'coverage-mask',type:'fill',source:'coverage',paint:{'fill-color':theme === 'dark' ? '#171a1f' : '#e4e2dd','fill-antialias':false}});
     }
@@ -255,16 +228,16 @@
   }
   /* Схема левобережья с подробными слоями (та же, что на ПК): на ПК и в приложении со вшитой картой */
   function richStyle() { return !!window.KartaStylePC && (!!window.KartaPC || info.files.some(function (f) { return f.builtin; })); }
-  /* Связь: есть — подложки из интернета; нет — только офлайн-схема (и загруженные снимки районов),
+  /* Связь: есть — подложки из интернета; нет — только офлайн-схема ,
    * без ожидания плиток, которые всё равно не придут. Оболочка сообщает о смене сети сама. */
   var netUp = true;
   try { netUp = kf && kf.networkUp ? !!kf.networkUp() : navigator.onLine !== false; } catch (e) { netUp = true; }
-  function shown() { return netUp || hasSat() ? current : 'off'; }
+  function shown() { return netUp ? current : 'off'; }
   function setNet(up) {
     up = !!up;
     if (up === netUp) return;
     netUp = up;
-    if (!window.KartaPC && current !== 'off' && !hasSat()) KartaMap.note(up ? 'Связь появилась — снимки снова загружаются' : 'Нет связи — показана офлайн-схема');
+    if (!window.KartaPC && current !== 'off') KartaMap.note(up ? 'Связь появилась — снимки снова загружаются' : 'Нет связи — показана офлайн-схема');
     kindsUi();
     sync();
     if (window.KartaApp && KartaApp.mapChanged) KartaApp.mapChanged();
@@ -273,14 +246,15 @@
   window.addEventListener('online', function () { if (!(kf && kf.networkUp)) setNet(true); });
   window.addEventListener('offline', function () { if (!(kf && kf.networkUp)) setNet(false); });
   function kindsUi() {
-    ['mapSat', 'mapHyb'].forEach(function (id) { var b = $(id); if (b) b.classList.toggle('dis', !netUp && !hasSat()); });
+    ['mapSat', 'mapHyb'].forEach(function (id) { var b = $(id); if (b) b.classList.toggle('dis', !netUp); });
   }
   var styled = '';
   function restyle() {
     var k = shown() + (document.body.classList.contains('dark') ? 'd' : 'l');
     if (!gl || k === styled) return;
     styled = k;
-    try { gl.setStyle(style()); } catch (e) { /* карта ещё не готова */ }
+    // без «diff»: стиль заменяется целиком — частично применённая разница ломала подписи MapLibre
+    try { gl.setStyle(style(), { diff: false }); heal(gl); } catch (e) { /* карта ещё не готова */ }
   }
   function readInfo(cb) {
     if (kf && kf.mapList) {
@@ -328,7 +302,158 @@
       interactive: false, attributionControl: false, fadeDuration: 0, validateStyle: false, maxZoom: 22, renderWorldCopies: false,
       pixelRatio: Math.min(window.devicePixelRatio || 1, 2) });
   }
+  /* Запасной путь без WebGL (выключен в браузере, видеокарта в чёрном списке, старый WebView):
+   * та же схема из тех же плиток рисуется на холсте Leaflet (protomaps-leaflet) — проще, без рельефа
+   * и маски области, но карта не пустая. Библиотека грузится только в этом случае. */
+  var raster = null, rasterWant = false, rasterTheme = '';
+  function loadRaster(cb) {
+    if (window.protomapsL) { cb(); return; }
+    if (loadRaster.busy) return;
+    loadRaster.busy = true;
+    var sc = document.createElement('script');
+    sc.src = 'vendor/protomaps-leaflet.js';
+    sc.onload = function () { loadRaster.busy = false; cb(); };
+    sc.onerror = function () { loadRaster.busy = false; };
+    document.head.appendChild(sc);
+  }
+  function makeRaster() {
+    var dark = document.body.classList.contains('dark'), list = files('map');
+    var src = bridge ? { getZxy: function (z, x, y) {
+      var t = '';
+      try { t = kf.mapTile(z, x, y); } catch (e) { t = ''; }
+      return Promise.resolve(t ? { data: b64(t) } : undefined);
+    } } : location.origin + '/omap/{z}/{x}/{y}.mvt?v=' + key;
+    rasterTheme = dark ? 'd' : 'l';
+    var l = protomapsL.leafletLayer({ url: src, flavor: dark ? 'dark' : 'light', lang: 'ru', attribution: '',
+      maxDataZoom: Math.max.apply(null, list.map(function (f) { return f.maxzoom || 15; })), maxZoom: 22, noWrap: true,
+      bounds: L.latLngBounds([[union(list)[1], union(list)[0]], [union(list)[3], union(list)[2]]]) });
+    l.setZIndex(0);
+    return l;
+  }
+  /* Наблюдение за схемой: ошибки MapLibre, пришедшие плитки, потеря WebGL. Если за 12 секунд внутри
+   * области схемы не пришло ни одной плитки — сверху кнопка «Проверка карты» (что именно не так). */
+  var stat = { errors: [], tiles: 0, lost: 0, restored: 0, since: 0 }, lostT = 0, watchT = 0;
+  function watchGl(m) {
+    stat.since = Date.now(); stat.tiles = 0;
+    m.on('style.load', function () { heal(m, 99); });
+    m.on('error', function (e) {
+      var t = e && e.error && (e.error.message || String(e.error));
+      if (t && stat.errors.length < 8 && stat.errors.indexOf(t) < 0) stat.errors.push(t);
+    });
+    m.on('sourcedata', function (e) { if (e && e.sourceId === 'p' && e.tile) stat.tiles++; });
+    // видеодрайвер отобрал WebGL (сбой, сон, «exit_on_context_lost»): ждём восстановления 3 с, затем — холст
+    m.on('webglcontextlost', function () { stat.lost++; clearTimeout(lostT); lostT = setTimeout(glLost, 3000); });
+    m.on('webglcontextrestored', function () { stat.restored++; clearTimeout(lostT); try { m.triggerRepaint(); } catch (e) { /* нет */ } });
+    clearTimeout(watchT);
+    watchT = setTimeout(function check() {
+      if (gl !== m) return;
+      if (!stat.tiles && covered() && glDiv && glDiv.style.display !== 'none') { stat.stuck = true; glNotice(); }
+      else if (!stat.tiles) watchT = setTimeout(check, 4000);
+    }, 12000);
+  }
+  function diag() {
+    var c = map.getCenter(), z = Math.max(0, Math.min(15, Math.round(map.getZoom()))), n = Math.pow(2, z);
+    var tx = Math.floor((c.lng + 180) / 360 * n), r = c.lat * Math.PI / 180, ty = Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * n);
+    var lines = ['Карта сети ' + (window.KartaPCVersion || '') + ' · ' + new Date().toLocaleString('ru-RU'), navigator.userAgent];
+    try {
+      var cv = document.createElement('canvas'), g2 = cv.getContext('webgl2'), g1 = g2 || cv.getContext('webgl'), ext = g1 && g1.getExtension('WEBGL_debug_renderer_info');
+      lines.push('WebGL2: ' + (g2 ? 'да' : 'нет') + ', WebGL: ' + (g1 ? 'да' : 'нет') + (ext ? ', ' + g1.getParameter(ext.UNMASKED_RENDERER_WEBGL) : ''));
+    } catch (e) { lines.push('WebGL: ошибка ' + e.message); }
+    var forced = ''; try { forced = localStorage.getItem(GLKEY) || ''; } catch (e) { forced = '?'; }
+    lines.push('Схема: ' + (gl ? 'MapLibre' : raster ? 'упрощённая (холст)' : 'не создана') + (forced === 'off' ? ', выбрана упрощённая' : '') +
+      ', плиток пришло: ' + stat.tiles + ', потерь WebGL: ' + stat.lost + ', восстановлений: ' + stat.restored);
+    lines.push('Файлы: ' + (info.files.map(function (f) { return f.slug + ' ' + Math.round(f.size / 1048576) + ' МБ z' + (f.minzoom || 0) + '–' + (f.maxzoom || 15); }).join('; ') || 'нет'));
+    lines.push('Вид: ' + c.lat.toFixed(4) + ', ' + c.lng.toFixed(4) + ', z' + map.getZoom().toFixed(1) + (covered() ? ' (в области схемы)' : ' (вне области схемы)') + ', подложка ' + shown() + (netUp ? '' : ', нет связи'));
+    if (stat.errors.length) lines.push('Ошибки MapLibre: ' + stat.errors.join(' | '));
+    var url = bridge ? null : location.origin + '/omap/' + z + '/' + tx + '/' + ty + '.mvt?v=diag' + Date.now();
+    if (!url) return Promise.resolve(lines.join('\n'));
+    return fetch(url, { cache: 'no-store' }).then(function (rs) {
+      return rs.arrayBuffer().then(function (b) {
+        var u = new Uint8Array(b).slice(0, 4), hex = Array.prototype.map.call(u, function (x) { return ('0' + x.toString(16)).slice(-2); }).join(' ');
+        lines.push('Проба плитки ' + z + '/' + tx + '/' + ty + ': ' + rs.status + ', ' + (rs.headers.get('Content-Type') || '?') + ', ' + b.byteLength + ' байт' + (hex ? ', начало ' + hex : '') +
+          (u[0] === 0x1f && u[1] === 0x8b ? ' — ПЛИТКА ОСТАЛАСЬ СЖАТОЙ (её меняет антивирус или прокси)' : ''));
+        return lines.join('\n');
+      });
+    }, function (e) { lines.push('Проба плитки: ошибка сети — ' + e.message); return lines.join('\n'); });
+  }
+  /* Самолечение (3.5.1). Если MapLibre не смог создать какой-то слой стиля (на одном рабочем ПК так и
+   * было: «Cannot read properties of undefined (reading 'type') at _updatePlacement» на каждом кадре,
+   * схема пустая), список слоёв расходится с созданными слоями. Тогда: убрать сломанные из порядка
+   * (кадры перестают падать), запомнить первый несозданный слой, пересоздать карту без него; после
+   * шести попыток — упрощённая схема на холсте. */
+  var skipLayers = {}, heals = 0, healT = 0;
+  function broken(m) {
+    var st = m && m.style;
+    if (!st || !st._order || !st._layers) return null;
+    var miss = st._order.filter(function (id) { return !st._layers[id]; });
+    return miss.length ? miss : null;
+  }
+  function heal(m, tries) {
+    clearTimeout(healT);
+    tries = tries || 0;
+    var miss = broken(m);
+    if (miss) {
+      var st = m.style;
+      st._order = st._order.filter(function (id) { return !!st._layers[id]; });
+      if (stat.errors.length < 8) stat.errors.push('слои не создались: ' + miss.slice(0, 5).join(', ') + (miss.length > 5 ? ' и ещё ' + (miss.length - 5) : ''));
+      skipLayers[miss[0]] = true;
+      if (gl !== m) return;
+      if (++heals > 6) { glLost(); return; }
+      try { m.remove(); } catch (e) { /* уже убрана */ }
+      gl = null;
+      try { gl = makeGl(); watchGl(gl); heal(gl); } catch (e) { gl = null; glOk = false; startRaster(); }
+      sync();
+      return;
+    }
+    if (gl === m && tries < 40 && !(m.style && m.style._loaded)) healT = setTimeout(function () { heal(m, tries + 1); }, 250);
+  }
+  function onPageError(msg, stack) {
+    if (!gl || !/maplibre|_updatePlacement|reading 'type'|of undefined/.test(String(msg) + ' ' + String(stack || ''))) return;
+    if (stat.errors.length < 8 && stat.errors.indexOf(String(msg)) < 0) stat.errors.push(String(msg).slice(0, 200));
+    heal(gl, 99);
+  }
+  window.addEventListener('error', function (e) { onPageError(e.message, e.error && e.error.stack); });
+  window.addEventListener('unhandledrejection', function (e) { var r = e.reason; onPageError(r && (r.message || r), r && r.stack); });
+  function glLost() {
+    glOk = false;
+    if (gl) { try { gl.remove(); } catch (e) { /* уже убрана */ } gl = null; }
+    if (glDiv) glDiv.style.display = 'none';
+    startRaster();
+  }
+  function startRaster() {
+    rasterWant = true;
+    loadRaster(function () {
+      if (!rasterWant) return;
+      if (raster) map.removeLayer(raster);
+      try { raster = makeRaster(); } catch (e) { raster = null; }
+      sync(); glNotice();
+      if (window.KartaApp && KartaApp.mapChanged) KartaApp.mapChanged();
+    });
+  }
+  /* Объяснение, почему схема упрощена или её нет: вместо пустой карты — что сделать */
+  var glNote = null;
+  function glNotice() {
+    var need = infoLoaded && hasVec() && (!webgl() || (stat.stuck && !stat.tiles));
+    if (!need) { if (glNote) glNote.hidden = true; return; }
+    if (!glNote) {
+      glNote = document.createElement('button'); glNote.type = 'button'; glNote.id = 'mapGlNotice';
+      glNote.style.cssText = 'position:absolute;left:50%;top:calc(env(safe-area-inset-top,0px) + 62px);transform:translateX(-50%);z-index:1001;max-width:calc(100% - 24px);' +
+        'border:0;border-radius:12px;padding:9px 14px;background:#fff4e5;color:#7a4100;font:600 13px/1.35 var(--font,system-ui);box-shadow:0 2px 10px rgba(0,0,0,.2);cursor:pointer;text-align:center';
+      map.getContainer().appendChild(glNote);
+      L.DomEvent.disableClickPropagation(glNote); L.DomEvent.disableScrollPropagation(glNote);
+      glNote.onclick = function () { if (window.KartaApp && KartaApp.mapCheck) KartaApp.mapCheck(); };
+    }
+    glNote.hidden = false;
+    var off = false; try { off = localStorage.getItem(GLKEY) === 'off'; } catch (e) { off = false; }
+    glNote.textContent = gl ? 'Схема не загрузилась · Проверка карты' : off ? 'Выбрана упрощённая схема · Проверка карты' :
+      raster ? 'Нет WebGL — схема показана упрощённо · Как включить' : 'Нет WebGL — подробная схема не рисуется · Как включить';
+  }
   function showGl(on) {
+    if (raster) {
+      var rt = document.body.classList.contains('dark') ? 'd' : 'l';
+      if (on && rt !== rasterTheme) { map.removeLayer(raster); raster = makeRaster(); }
+      put(raster, on);
+    }
     if (!glDiv) return;
     var was = glDiv.style.display !== 'none';
     glDiv.style.display = on ? '' : 'none';
@@ -340,20 +465,27 @@
       info = i;
       infoLoaded = true;
       kindsUi();
-      if (k !== key || (!gl && i.files.length)) {
+      if (k !== key || (!gl && !rasterWant && i.files.length)) {
         key = k;
         if (gl) { try { gl.remove(); } catch (e) { /* уже убрана */ } gl = null; }
+        if (raster) { map.removeLayer(raster); raster = null; }
         if (i.files.length && webgl()) {
-          try { gl = makeGl(); gl.on('error', function () { /* нет плитки — не страшно */ }); } catch (e) { gl = null; }
+          try {
+            gl = makeGl();
+            watchGl(gl);
+            heal(gl);
+          } catch (e) { gl = null; glOk = false; }
         }
+        if (i.files.length && !gl) startRaster();
       }
+      glNotice();
       sync();
       if (then) then(i);
     });
   }
   /* центр экрана внутри района, для которого есть офлайн-карта */
   function covered() {
-    if (!gl || (!offlineOnly && map.getZoom() < 7)) return false;
+    if (!(gl || raster) || (!offlineOnly && map.getZoom() < 7)) return false;
     var c = map.getCenter();
     return files('map').some(function (f) { return inBox(f, c.lat, c.lng); });
   }
@@ -389,19 +521,20 @@
       };
     }
     var c = map.getCenter(), outside = !insideCoverage(c.lat,c.lng);
-    coverageNotice.hidden = !!gl && !outside;
-    coverageNotice.disabled = !gl;
+    var drawnMap = !!(gl || raster);
+    coverageNotice.hidden = (drawnMap && !outside) || (!gl && hasVec() && !webgl());   // без WebGL — своё объяснение сверху
+    coverageNotice.disabled = !drawnMap;
     coverageNotice.textContent = !hasVec() ? 'Файл схемы не найден. Перенесите папку map вместе с программой.' : !gl ?
       'Карта не отрисовалась. Проверьте аппаратное ускорение браузера.' : 'Вне загруженной области · Показать схему';
   }
   /* какие слои должны быть на карте сейчас */
   function sync() {
     var cur = shown(), cov = covered(), sch = cur === 'off', net = netUp && sch && !(cov && schema !== 'online');
-    // офлайн-карта районов — в самом низу. «Схема»: видна в своём районе, если над ней нет схемы из
-    // интернета. «Спутник» и «Гибрид»: загруженные снимки района (нет их — офлайн-схема), а поверх —
+    // офлайн-схема — в самом низу. «Схема»: видна в своей области, если над ней нет схемы из
+    // интернета. «Спутник» и «Гибрид»: под ними та же схема, а поверх —
     // подробные снимки из интернета и те, что уже просматривались.
     restyle();
-    showGl(!!gl && (offlineOnly || (sch ? cov && schema !== 'online' : true)));
+    showGl(!!(gl || raster) && (offlineOnly || (sch ? cov && schema !== 'online' : true)));
     // вшитая карта 7–11 и схема из интернета — там, где районов офлайн-карты нет (или так выбрано)
     put(offlineTiles, !window.KartaPC && sch && !cov);
     put(osm, !offlineOnly && net, true);
@@ -412,18 +545,21 @@
   map.on('moveend zoomend', sync);
 
   window.KartaMap = {
-    info: function () { return { files: info.files, gl: webgl(), drawn: !!gl }; },
+    info: function () { return { files: info.files, gl: webgl(), drawn: !!gl, raster: !!raster, tiles: stat.tiles, stuck: !!stat.stuck }; },
+    diag: diag,
+    simple: function (on) { try { if (on) localStorage.setItem(GLKEY, 'off'); else localStorage.removeItem(GLKEY); } catch (e) { /* нет */ } location.reload(); },
+    simpleOn: function () { try { return localStorage.getItem(GLKEY) === 'off'; } catch (e) { return false; } },
     photo: function () { return shown() !== 'off'; },          // под линиями снимки — линиям нужна тёмная тень
     glMap: function () { return gl; },
     reload: loadVec,
     note: function () {},                       // app.js подставляет всплывающее сообщение
     credits: (function () {
       var schemaTxt = 'Схема: © участники OpenStreetMap, ODbL (выгрузка 18.11.2026); контуры домов, которых нет в OpenStreetMap, — Microsoft Global ML Building Footprints, ODbL; горизонтали — Copernicus GLO-30 DEM (© DLR e.V. 2010–2014 и © Airbus Defence and Space GmbH 2014–2018, предоставлено по программе Copernicus ЕС); плитки — схема Protomaps (Planetiler). Границы областей — OpenStreetMap. Номера домов показаны там, где они есть в OpenStreetMap.';
-      return window.KartaPC ? schemaTxt : schemaTxt + ' Снимки © Esri; загруженные снимки районов — Sentinel-2 cloudless, https://s2maps.eu, EOX IT Services GmbH (содержит изменённые данные Copernicus Sentinel 2016–2017); подписи на снимках © Яндекс.';
+      return window.KartaPC ? schemaTxt : schemaTxt + ' Снимки © Esri; подписи на снимках © Яндекс.';
     })(),
     setSchema: function (v) { schema = !offlineOnly && v === 'online' ? 'online' : 'auto'; sync(); },
     // тема сменилась — офлайн-карта перерисовывается в светлых или тёмных цветах
-    retheme: restyle
+    retheme: function () { restyle(); sync(); }
   };
 
   // ---------------------------------------------------------------- выбор подложки
@@ -433,7 +569,7 @@
 
   window.useMap = function (kind) {
     current = !window.KartaPC && (kind === 'sat' || kind === 'hyb') ? kind : 'off';
-    if (current !== 'off' && !netUp && !hasSat()) KartaMap.note('Нет связи — снимки появятся, когда она будет. Пока показана офлайн-схема.');
+    if (current !== 'off' && !netUp) KartaMap.note('Нет связи — снимки появятся, когда она будет. Пока показана офлайн-схема.');
     sync();
     $('mapOff').classList.toggle('on', current === 'off');
     $('mapSat').classList.toggle('on', current === 'sat');

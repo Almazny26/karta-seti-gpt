@@ -250,8 +250,8 @@ class OfflineHttpTest(unittest.TestCase):
         self.assertEqual([f["slug"] for f in st["files"]], ["kherson"])
         self.assertEqual([g["slug"] for g in st["regions"]], ["kherson", "zaporozhye"])
         r = urllib.request.urlopen(self.base + "/omap/15/19352/11573.mvt", timeout=10)
-        self.assertEqual(r.headers.get("Content-Encoding"), "gzip")
-        self.assertEqual(__import__("gzip").decompress(r.read()), b"house")
+        self.assertIsNone(r.headers.get("Content-Encoding"))   # 3.5.1: без gzip — антивирусы и прокси его портили
+        self.assertEqual(r.read(), b"house")
         self.assertEqual(urllib.request.urlopen(self.base + "/omap/15/1/1.mvt", timeout=10).status, 204)
         # шрифты подписей: есть диапазон — отдаётся, нет — пустой ответ, а не ошибка
         r = urllib.request.urlopen(self.base + "/vendor/fonts/Noto%20Sans%20Regular/1024-1279.pbf", timeout=10)
