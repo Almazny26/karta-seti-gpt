@@ -1,5 +1,12 @@
 {
-  "versionCode": 350000,
-  "versionName": "3.5.0",
-  "note": "3.5.0: APK со вшитой офлайн-схемой (~165 МБ) собирает GitHub Actions «Сборка APK» и выкладывает в релиз apk-3.5.0.N; после сборки здесь будут versionCode 350000+N, ссылка url и sha256. apk/karta-seti.apk в git — старая сборка 2.0.37, сборка 3.5 её удаляет."
+  "versionCode": 350028,
+  "versionName": "3.5.0.28",
+  "url": "https://github.com/Almazny26/karta-seti-gpt/releases/download/v3.5.0/karta-seti.apk",
+  "build": "https://github.com/Almazny26/apk_map/releases/tag/apk-3.5.0.28",
+  "buildUrl": "https://github.com/Almazny26/apk_map/releases/download/apk-3.5.0.28/karta-seti.apk",
+  "sha256": "7218911fd4b5738ec75c6560e8e659f8c4d66eb7795c23f1f1f44ee26f9d707d",
+  "size": 186808868,
+  "built": "2026-11-20T05:42:44Z",
+  "commit": "889c0d6 (karta-seti-gpt) = b73f20f (apk_map)",
+  "signer": "CN=Karta Seti, O=Internal; SHA-256 4dda05ee6c2368ad8ff0b376f3694c9578f4d206e33245438d680ae2489e8816"
 }

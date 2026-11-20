@@ -44,7 +44,7 @@
   доходит до края отрисованных плиток (~5 км).
 - Подписи: схема — OpenStreetMap, Microsoft Building Footprints, горизонтали Copernicus GLO-30.
 
-**Сборка APK**: GitHub Actions скачивает схему из релиза `maps` (`android/offline-map.properties`:
+**Сборка APK** (подписанная — в репозитории `apk_map`, где хранится ключ подписи `KEYSTORE_B64`; здесь та же сборка без ключа — проверочная): GitHub Actions скачивает схему из релиза `maps` (`android/offline-map.properties`:
 адрес, размер, SHA-256), собирает и подписывает APK, выкладывает его в релиз `apk-3.5.0.N` и
 записывает ссылку в `apk/version.json` (сам APK со схемой больше 100 МБ и в git не кладётся).
 Локально: `cd android && ./gradlew assembleDebug` (берёт `map/karta-offline.pmtiles`).
