@@ -14,6 +14,7 @@ from http.cookies import SimpleCookie
 MASS_DELETE = 10        # больше удалений за одну правку — только администратор
 SNAPSHOT_OPS = 20       # перед правкой из стольких объектов (или 5+ удалений) — снимок на сервере
 SNAPSHOT_KEEP = 50
+COLOR_MAX = 60          # цвет тубы и цвет волокна ВОЛС — свободный текст не длиннее
 SESSION_IDLE = 12 * 3600
 BACKUP_NAME = re.compile(r'^(state|snapshot)-[0-9A-Za-z_.-]+\.json$')
 
@@ -392,6 +393,10 @@ class Shared:
         if fib is not None and (isinstance(fib, bool) or not isinstance(fib, (str, int)) or len(str(fib)) > 40
                                 or (isinstance(fib, int) and not 0 <= fib <= 10000)):
             raise SharedError(400, 'Неверное число жил')
+        for key, title in (('tubeColor', 'цвет тубы'), ('fiberColor', 'цвет волокна')):   # 3.5.4: свободный текст
+            value = f.get(key)
+            if value is not None and (not isinstance(value, str) or len(value) > COLOR_MAX):
+                raise SharedError(400, 'Слишком длинный или неверный %s (не больше %d знаков)' % (title, COLOR_MAX))
 
     def apply(self, user, data):
         if user['role'] == 'viewer':

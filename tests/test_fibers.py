@@ -29,6 +29,17 @@ class FibersTest(unittest.TestCase):
             with self.assertRaises(SharedError, msg=repr(bad)):
                 self.check(fiber(fibers=bad))
 
+    def test_tube_and_fiber_colors(self):
+        # 3.5.4: «Цвет тубы» и «Цвет волокна» — свободный текст, необязательно, не длиннее COLOR_MAX
+        from shared import COLOR_MAX
+        self.check(fiber(tubeColor='синий', fiberColor='оранжевый'))
+        self.check(fiber(tubeColor='', fiberColor='красный с чёрной полосой'))
+        self.check(fiber(tubeColor='x' * COLOR_MAX))
+        for key in ('tubeColor', 'fiberColor'):
+            for bad in ('x' * (COLOR_MAX + 1), 5, ['синий'], {'c': 1}, True):
+                with self.assertRaises(SharedError, msg='%s=%r' % (key, bad)):
+                    self.check(fiber(**{key: bad}))
+
 
 if __name__ == '__main__':
     unittest.main()

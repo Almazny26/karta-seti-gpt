@@ -46,6 +46,8 @@
     'другое': '<path d="M12 2.6 20.2 7.3V16.7L12 21.4 3.8 16.7V7.3Z"/>'
   };
   var STATES = { 'работает': '#2e7d32', 'авария': '#c62828', 'работы': '#ef6c00', 'план': '#78909c' };
+  var FIBER_COLORS = ['синий', 'оранжевый', 'зелёный', 'коричневый', 'серый', 'белый', 'красный', 'чёрный', 'жёлтый', 'фиолетовый', 'розовый', 'бирюзовый', 'натуральный'];
+  var COLOR_MAX = 60;   // столько же проверяет сервер совместной работы (shared.py)
   var PT_KINDS = ['опора', 'колодец', 'муфта', 'кросс', 'запас', 'точка'];
   var PT_RANK = { 'кросс': 1, 'муфта': 2, 'запас': 3, 'колодец': 4, 'опора': 5, 'точка': 6 };   // кто остаётся издали
   var PT_COLOR = { 'опора': '#5d4037', 'колодец': '#455a64', 'муфта': '#ef6c00', 'кросс': '#2e7d32', 'запас': '#00838f', 'точка': '#78909c', 'узел': '#1565c0' };
@@ -411,7 +413,22 @@
     '.ap input,.ap select,.ap textarea{width:100%;box-sizing:border-box;font:15px var(--font);border:0;border-radius:10px;background:var(--tonal);' +
       'color:var(--text);padding:10px 12px;min-height:44px}',
     '.ap textarea{min-height:70px;resize:vertical}',
-    '.ap input:focus,.ap select:focus,.ap textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px var(--accent)}',
+    '.ap input:focus,.ap select:focus,.ap textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,122,255,.28)}',
+    // 3.5.4: списки выбора — как поля ввода (высота, скругление), своя стрелка-«галочка» вместо системной
+    '.ap select,#apUsersDialog select{-webkit-appearance:none;-moz-appearance:none;appearance:none;height:44px;padding-right:36px;line-height:1.2;cursor:pointer;' +
+      'background-image:url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2712%27 height=%278%27 viewBox=%270 0 12 8%27%3E%3Cpath d=%27M1 1.5l5 5 5-5%27 fill=%27none%27 stroke=%27%238e8e93%27 stroke-width=%272%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27/%3E%3C/svg%3E");' +
+      'background-repeat:no-repeat;background-position:right 13px center;background-size:12px 8px}',
+    '.ap select::-ms-expand{display:none}.ap select option{background:var(--panel);color:var(--text)}',
+    '#apUsersDialog select:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,122,255,.28)}',
+    // раскрывающиеся блоки: одна аккуратная «галочка» у текста, поворачивается при открытии
+    '.ap details>summary,#apUsersDialog details>summary{list-style:none;display:flex;align-items:center;gap:8px}',
+    '.ap details>summary::-webkit-details-marker,#apUsersDialog details>summary::-webkit-details-marker{display:none}',
+    '.ap details>summary::before,#apUsersDialog details>summary::before{content:"";flex:none;width:6px;height:6px;margin:0 3px 0 1px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;' +
+      'transform:rotate(-45deg);transition:transform .15s;opacity:.75}',
+    '.ap details[open]>summary::before,#apUsersDialog details[open]>summary::before{transform:rotate(45deg) translate(-1px,-1px)}',
+    '.ap details.hlp summary::after{content:none!important}',
+    // перенос текста: по словам, длинные слова без пробелов — не вылезают за край
+    '.ap-dhead h3,#apSheet .ap-title,.ap .item .tx b,.ap table.kv td{overflow-wrap:break-word}.ap table.kv td:last-child{overflow-wrap:anywhere}',
     '.ap label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin:10px 0 4px}',
     '.ap .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}',
     '.ap .row>button{flex:1 1 auto}',
@@ -421,7 +438,7 @@
     '#apSheet.ap-measuring .ap-body{padding-bottom:10px}#apSheet.ap-measuring .row{margin-top:6px}',
     '.ap .lay-extra{margin-top:10px}.ap .lay-extra summary{cursor:pointer;padding:8px 0;color:var(--muted)}',
     '.ap .chips.lay-main{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;min-width:0;flex:1}',
-    '.ap .lay-main .chip{justify-content:center;padding:6px 4px;font-size:clamp(11px,3.2vw,14px);white-space:nowrap}',
+    '.ap .lay-main .chip{min-width:0;justify-content:center;padding:5px 6px;font-size:clamp(12px,3.4vw,14px);white-space:normal;text-align:center;line-height:1.15}',
     '.ap .point-fields{display:flex;gap:8px;margin-top:8px}.ap .point-fields>input{min-width:0}',
     '.ap .joint-note{display:block;margin:8px 0;white-space:pre-wrap;overflow-wrap:anywhere}.ap .joint-dist{white-space:normal;overflow-wrap:anywhere}',
     '.ap .route-option input[type=radio]{width:auto}',
@@ -430,13 +447,21 @@
     '.ap .chips.fib .chip{min-width:0;min-height:40px;justify-content:center;padding:4px 2px;font-variant-numeric:tabular-nums}',
     '.ap .lrow.fibrow{align-items:flex-start}.ap .lrow.fibrow>.muted{line-height:40px}',
     '.ap .chips.tight{margin:6px 0 0}.ap .chips.scroll{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-right:16px}.ap .chips.scroll::-webkit-scrollbar{display:none}',
+    // 3.5.4: виды узлов и точек — сетка во всю ширину панели (раньше — строка с прокруткой, мышью не листалась)
+    '.ap .chips.kinds{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:4px}',
+    '.ap .chips.kinds .chip{min-width:0;min-height:40px;padding:5px 8px;gap:6px;justify-content:flex-start;text-align:left;white-space:normal;line-height:1.15;font-size:13.5px}',
+    '.ap .chips.kinds .chip>svg,.ap .chips.kinds .chip>.ap-pt,.ap .chip .ln{flex:none}',
+    '.ap .chips.kinds.nk{grid-template-columns:repeat(auto-fill,minmax(132px,1fr))}',
+    // участки по обе стороны точки: подпись сверху, три кнопки прокладки — во всю ширину
+    '.ap .lrow.layrow{display:flex;flex-wrap:wrap;gap:2px 10px}.ap .lrow.layrow>.muted{flex:1 0 100%;font-size:12px}.ap .lrow.layrow>.chips{flex:1 1 100%}',
     '.ap .lrow{display:flex;align-items:center;gap:10px;margin-top:6px}.ap .lrow>.muted{flex:0 0 58px}.ap .lrow .chips{margin:0}',
     '.ap .row.tool{flex-wrap:nowrap}.ap .row.tool>button{flex:0 0 auto}',
     '.ap .chip{border:0;background:var(--tonal);color:var(--text);border-radius:999px;padding:7px 13px;min-height:36px;font:500 14px var(--font);cursor:pointer;display:inline-flex;align-items:center;gap:6px}',
+    '.ap .chip:focus{outline:none}.ap .chip:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,122,255,.35)}',
     '.ap .chip.on,body.dark .ap .chip.on{background:var(--accent);color:#fff;font-weight:600}',
     '.ap .chip .ap-pt{filter:none}',
     '.ap .chip i{width:10px;height:10px;border-radius:50%;display:inline-block}',
-    '.ap .chip .ln{width:22px;height:0;border-top:4px solid}',
+    '.ap .chip .ln{width:18px;height:0;border-top:4px solid}',
     '@media (max-width:599px){.ap .lay-main .ln{display:none}.ap .lrow{display:block}' +
       '.ap .row.tool>button{flex-shrink:1;min-width:0;padding-inline:clamp(4px,2vw,10px);overflow-wrap:anywhere}' +
       '.ap .point-fields>input{flex:1;min-width:0;width:auto}.ap .point-fields>button{flex:0 0 auto;padding-inline:clamp(6px,2vw,12px)}}',
@@ -489,7 +514,7 @@
     // шапка окна: заголовок слева, крестик справа на одной линии с ним; при прокрутке остаётся на месте
     '.ap-dhead{position:sticky;top:-18px;z-index:3;margin:-18px -18px 8px;padding:14px 18px 8px;min-height:34px;background:var(--panel);display:flex;align-items:center;gap:12px;border-radius:14px 14px 0 0}',
     '.ap-dhead .ap-grip{position:absolute;left:50%;top:6px;margin:0 0 0 -18px;display:none}#apDlg.lock .ap-dx{display:none}',
-    '.ap-dhead h3{flex:1 1 auto;min-width:0;margin:0!important}.ap-dx{margin-left:auto}',
+    '.ap-dhead h3{flex:1 1 auto;min-width:0;margin:0!important;line-height:1.25;align-self:center}.ap-dx{margin-left:auto;align-self:flex-start}',
     '@media (max-width:899px){.ap-dhead{padding-top:20px;border-radius:20px 20px 0 0}.ap-dhead .ap-grip{display:block}}',
     '#apDlgBox h3{margin:0 0 6px;font-size:18px}',
     '@media (max-width:899px){#apDlg{align-items:flex-end}#apDlgBox{width:100%;border-radius:20px 20px 0 0;max-height:92vh;padding-bottom:calc(18px + env(safe-area-inset-bottom))}}',
@@ -824,10 +849,25 @@
       if (f.type === 'select') return '<label for="' + id + '">' + esc(f.label) + '</label><select id="' + id + '">' +
         f.options.map(function (o) { return '<option' + (o === v ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('') + '</select>';
       if (f.type === 'textarea') return '<label for="' + id + '">' + esc(f.label) + '</label><textarea id="' + id + '">' + esc(v) + '</textarea>';
-      return '<label for="' + id + '">' + esc(f.label) + '</label><input id="' + id + '" value="' + esc(v) + '"' + (f.placeholder ? ' placeholder="' + esc(f.placeholder) + '"' : '') + '>';
+      // выбор кнопками (число жил — та же сетка, что в панели нанесения); повторное нажатие снимает выбор
+      if (f.type === 'chips') return '<label>' + esc(f.label) + '</label><input type="hidden" id="' + id + '" value="' + esc(v) + '"><div class="chips fib formchips" data-for="' + id + '">' +
+        f.options.map(function (o) { return '<button type="button" class="chip' + (o === v ? ' on' : '') + '" data-v="' + esc(o) + '">' + esc(o) + '</button>'; }).join('') + '</div>';
+      return '<label for="' + id + '">' + esc(f.label) + '</label><input id="' + id + '" value="' + esc(v) + '"' + (f.placeholder ? ' placeholder="' + esc(f.placeholder) + '"' : '') +
+        (f.max ? ' maxlength="' + f.max + '"' : '') + (f.list ? ' list="' + id + 'l" autocomplete="off"' : '') + '>' +
+        (f.list ? '<datalist id="' + id + 'l">' + f.list.map(function (o) { return '<option value="' + esc(o) + '">'; }).join('') + '</datalist>' : '');
     }).join('') + '<div class="row"><button type="button" class="b" id="apOk">' + esc(okLabel || 'Сохранить') + '</button>' +
       '<button type="button" class="b t" id="apNo">Отмена</button></div>');
     if (pc) { var f0 = $('apf0'); if (f0) f0.focus(); }
+    dlgBox.querySelectorAll('.formchips').forEach(function (row) {
+      row.querySelectorAll('[data-v]').forEach(function (b) {
+        b.onclick = function () {
+          var on = !b.classList.contains('on'), inp = $(row.getAttribute('data-for'));
+          row.querySelectorAll('.chip').forEach(function (c) { c.classList.remove('on'); });
+          if (on) b.classList.add('on');
+          inp.value = on ? b.getAttribute('data-v') : '';
+        };
+      });
+    });
     function ok() {
       var v = {};
       fields.forEach(function (f, i) { v[f.key] = $('apf' + i).value.trim(); });
@@ -1413,7 +1453,8 @@
         (L2.ground_guess ? kvRow('Предполагается в земле', len(L2.ground_guess)) : '') +
         kvRow('Откуда', a && a.nid ? esc(nodeName(a.nid)) : '') + kvRow('Куда', b && b.nid ? esc(nodeName(b.nid)) : '') +
         (o.type === 'fiber' ? kvRow('Точки', pts.length + (Object.keys(kinds).length ? ' (' + Object.keys(kinds).map(function (k) { return esc(k) + ' ' + kinds[k]; }).join(', ') + ')' : '')) : '') +
-        (o.type === 'fiber' ? kvRow('Кабель', esc([f.fibers ? f.fibers + ' жил' : '', f.cable].filter(Boolean).join(', '))) : '') +
+        (o.type === 'fiber' ? kvRow('Кабель', esc([f.fibers ? f.fibers + ' жил' : '', f.cable].filter(Boolean).join(', '))) +
+          kvRow('Цвет тубы', esc(f.tubeColor || '')) + kvRow('Цвет волокна', esc(f.fiberColor || '')) : '') +
         kvRow('Примечание', esc(f.note || '')) + (shared ? kvRow('Добавил', esc(o.createdBy || o.by || 'Без подписи')) : '') + kvRow('Изменено', esc(o.by || '') + ', ' + when(o.t)) + '</table>';
       if (o.type === 'fiber') {
         var js = lineConnections(o, pts);
@@ -1651,7 +1692,7 @@
     if (joint && !edit && note) html += '<div class="sec">Примечание</div><div class="joint-note">' + esc(note) + '</div>';
     if (p.nid && edit) html += '<p class="muted">Точка стоит на узле. Перетащите её, чтобы отвязать от узла.</p>';
     if (edit && fib && !p.nid) {
-      html += '<div class="chips tight scroll">' + PT_KINDS.map(function (k) {
+      html += '<div class="chips tight kinds">' + PT_KINDS.map(function (k) {
         return '<button type="button" class="chip' + (p.kind === k ? ' on' : '') + '" data-k="' + k + '">' + ptSvg(k, 16) + k + '</button>';
       }).join('') + '</div>';
       var savePoint = '<button type="button" class="b t" id="apPtSave">Сохранить</button>';
@@ -1662,7 +1703,7 @@
     }
     // участки по обе стороны точки — одной строкой каждый
     function layRow(txt, cur, w) {
-      return '<div class="lrow"><span class="muted">' + txt + '</span>' + (edit ? layChips(cur, w) : '<b>' + LAY[cur].name + '</b>') + '</div>';
+      return '<div class="lrow' + (edit ? ' layrow' : '') + '"><span class="muted">' + txt + '</span>' + (edit ? layChips(cur, w) : '<b>' + LAY[cur].name + '</b>') + '</div>';
     }
     if (fib && i > 0) html += layRow('← от ' + i, lay[i - 1], 'segp');
     if (fib && i < pts.length - 1) html += layRow('→ до ' + (i + 2), lay[i], 'seg');
@@ -1755,13 +1796,16 @@
     form(cap(TYPE_NAME[o.type]), [
       { key: 'name', label: 'Название', value: o.f.name, required: true }
     ].concat(fib ? [
-      { key: 'fibers', label: 'Число жил', type: 'select', options: [''].concat(FIBERS).concat(o.f.fibers && FIBERS.indexOf(String(o.f.fibers)) < 0 ? [String(o.f.fibers)] : []), value: o.f.fibers == null ? '' : String(o.f.fibers) },
-      { key: 'cable', label: 'Марка кабеля', value: o.f.cable, placeholder: 'например: ОКСН-16' }
+      { key: 'fibers', label: 'Число жил', type: 'chips', options: FIBERS.concat(o.f.fibers && FIBERS.indexOf(String(o.f.fibers)) < 0 ? [String(o.f.fibers)] : []), value: o.f.fibers == null ? '' : String(o.f.fibers) },
+      { key: 'cable', label: 'Марка кабеля', value: o.f.cable, placeholder: 'например: ОКСН-16' },
+      // 3.5.4: цвет тубы (модуля) и волокна — свободный текст, подсказки — стандартные цвета маркировки
+      { key: 'tubeColor', label: 'Цвет тубы', value: o.f.tubeColor, placeholder: 'например: синий', max: COLOR_MAX, list: FIBER_COLORS },
+      { key: 'fiberColor', label: 'Цвет волокна', value: o.f.fiberColor, placeholder: 'например: оранжевый', max: COLOR_MAX, list: FIBER_COLORS }
     ] : []).concat([
       { key: 'note', label: 'Примечание', type: 'textarea', value: o.f.note }
     ]).concat(whoField()), 'Сохранить', function (v) {
       var f = { name: v.name, note: v.note };
-      if (fib) { f.fibers = v.fibers; f.cable = v.cable; if (FIBERS.indexOf(v.fibers) >= 0) try { localStorage.setItem(FIB_KEY, v.fibers); } catch (e) { /* не важно */ } }
+      if (fib) { f.fibers = v.fibers; f.cable = v.cable; if (v.tubeColor || o.f.tubeColor != null) f.tubeColor = v.tubeColor.slice(0, COLOR_MAX); if (v.fiberColor || o.f.fiberColor != null) f.fiberColor = v.fiberColor.slice(0, COLOR_MAX); if (FIBERS.indexOf(v.fibers) >= 0) try { localStorage.setItem(FIB_KEY, v.fibers); } catch (e) { /* не важно */ } }
       if (v.name !== o.f.name) f.autoName = false;
       put(id, o.type, f);
     });
@@ -2040,7 +2084,7 @@
     var body, html = '';
     if (t.kind === 'node') {
       body = openSheet('Новый узел', view);
-      html = '<div class="chips tight scroll">' + NODE_KINDS.map(function (k) {
+      html = '<div class="chips tight kinds nk">' + NODE_KINDS.map(function (k) {
           return '<button type="button" class="chip' + (t.nodeKind === k ? ' on' : '') + '" data-nk="' + esc(k) + '">' + shapeSvg(k, STATES['работает'], 16) + esc(k) + '</button>';
         }).join('') + '</div>' +
         '<p class="muted">' + (t.last ? 'Добавлен «' + esc(t.last.name) + '». ' : '') + 'Нажмите на место узла или поставьте его в перекрестие. Название дастся само — его можно изменить потом.</p>' +
@@ -2068,7 +2112,7 @@
           return '<button type="button" class="chip' + (String(t.fibers) === k ? ' on' : '') + '" data-fib="' + k + '">' + k + '</button>';
         }).join('') + '</div></div>';
       html += layChips(t.nextLay, 'next') +
-        '<div class="chips tight scroll">' + PT_KINDS.map(function (k) {
+        '<div class="chips tight kinds">' + PT_KINDS.map(function (k) {
           return '<button type="button" class="chip' + (t.nextKind === k ? ' on' : '') + '" data-k="' + k + '">' + ptSvg(k, 16) + k + '</button>';
         }).join('') + '</div>';
     }
@@ -2130,7 +2174,7 @@
     var list = alive().filter(function (o) {
       if (filter === 'node' || filter === 'fiber' || filter === 'radio') { if (o.type !== filter) return false; }
       else if (filter !== 'all' && (o.type !== 'node' || o.f.state !== filter)) return false;
-      return !query || [o.f.name, o.f.addr, o.f.note, o.f.kind, o.f.cable, o.f.fibers ? o.f.fibers + ' ж ' + o.f.fibers + 'ж' : ''].join(' ').toLowerCase().indexOf(query) >= 0;
+      return !query || [o.f.name, o.f.addr, o.f.note, o.f.kind, o.f.cable, o.f.tubeColor, o.f.fiberColor, o.f.fibers ? o.f.fibers + ' ж ' + o.f.fibers + 'ж' : ''].join(' ').toLowerCase().indexOf(query) >= 0;
     }).sort(function (a, b) {
       var ord = { node: 0, fiber: 1, radio: 2 };
       return ord[a.type] - ord[b.type] || String(a.f.name || '').localeCompare(String(b.f.name || ''), 'ru', { numeric: true });
@@ -2311,10 +2355,18 @@
       return !Array.isArray(pts) || pts.length < 2 || pts.some(function (q) { return !coords(q); }) ||
         (o.type === 'fiber' && o.f.lay != null && !Array.isArray(o.f.lay));
     })) return 'В файле есть повреждённые объекты. Карта не изменена.';
+    // цвет тубы и волокна — текст не длиннее COLOR_MAX (как на сервере совместной работы)
+    Object.keys(objs).forEach(function (id) {
+      ['tubeColor', 'fiberColor'].forEach(function (k) {
+        var v = objs[id].f[k];
+        if (v == null) return;
+        if (typeof v !== 'string') delete objs[id].f[k]; else if (v.length > COLOR_MAX) objs[id].f[k] = v.slice(0, COLOR_MAX);
+      });
+    });
     return null;
   }
   var FIELD = { name: 'название', kind: 'вид', state: 'состояние', addr: 'адрес', note: 'примечание', lat: 'место', lng: 'место',
-    fnodes: 'трасса', points: 'трасса', lay: 'прокладка', fibers: 'жилы', cable: 'кабель' };
+    fnodes: 'трасса', points: 'трасса', lay: 'прокладка', fibers: 'жилы', cable: 'кабель', tubeColor: 'цвет тубы', fiberColor: 'цвет волокна' };
   var ROUTE_FIELDS = ['fnodes', 'points', 'lay', 'dist', 'from', 'to'];
   function routeRevision(o) {
     if (o.type !== 'fiber' && o.type !== 'radio') return '';
@@ -2574,7 +2626,7 @@
   // для проверок и совместимости
   window.KartaNet = { data: function () { return copy(db); }, counts: counts, valid: valid };
   window.KartaApp = { setMode: setMode, refresh: refresh, fitAll: fitAll, startLine: startLine, startNode: startNode, finishTool: finishTool,
-    showObject: focusObj,
+    showObject: focusObj, showPoint: showPoint, showLineMenu: showLineMenu,   // для проверок
     receiveShared: function (net) {
       db = net; sharedLast = copy(net);
       if (shared.user().role === 'viewer' && mode !== 'view') setMode('view');
@@ -2716,7 +2768,7 @@
       '<button type="button" class="b t" data-a="who">Изменить</button></div>' +
       '<div class="srow"><span>Схема не видна или с ошибками<small>WebGL, плитки, ошибки карты; упрощённая схема</small></span><button type="button" class="b t" data-a="mapcheck">Проверка карты</button></div>' +
       '<div class="row"><button type="button" class="b d" data-a="reset">Сбросить настройки</button><button type="button" class="b" id="apNo">Готово</button></div>' +
-      '<p class="muted">Карта сети ' + (window.KartaPCVersion || '3.5.3') + '. Настройки хранятся на этом устройстве и в файл обмена не попадают.<br>' + esc((window.KartaMap && window.KartaMap.credits) || '') + '</p>';
+      '<p class="muted">Карта сети ' + (window.KartaPCVersion || '3.5.4') + '. Настройки хранятся на этом устройстве и в файл обмена не попадают.<br>' + esc((window.KartaMap && window.KartaMap.credits) || '') + '</p>';
     openDlg(html);
     dlgBox.setAttribute('data-set', '1');
     dlgBox.scrollTop = top;
@@ -2812,6 +2864,21 @@
     document.body.appendChild(co);
     map.on('mousemove', function (e) { co.textContent = e.latlng.lat.toFixed(5) + ', ' + e.latlng.lng.toFixed(5) + '  ·  СК-42 ' + sk(e.latlng.lat, e.latlng.lng) + '  ·  масштаб ' + map.getZoom(); });
   }
+  // 3.5.4: колесо мыши листает строки с горизонтальной прокруткой (если такие где-то остались)
+  document.addEventListener('wheel', function (e) {
+    if (e.ctrlKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+    for (var el = e.target; el && el !== document.body && el.nodeType === 1; el = el.parentElement) {
+      if (el.scrollWidth <= el.clientWidth + 1) continue;
+      var ox = getComputedStyle(el).overflowX;
+      if (ox !== 'auto' && ox !== 'scroll') continue;
+      if (el.scrollHeight > el.clientHeight + 1) return;   // у блока своя вертикальная прокрутка
+      var max = el.scrollWidth - el.clientWidth, d = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+      if ((d < 0 && el.scrollLeft <= 0) || (d > 0 && el.scrollLeft >= max - 1)) return;
+      el.scrollLeft = Math.max(0, Math.min(max, el.scrollLeft + d));
+      e.preventDefault();
+      return;
+    }
+  }, { passive: false });
   document.addEventListener('keydown', function (e) {
     if (document.querySelector('dialog[open]')) return;
     if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'я') && !/INPUT|TEXTAREA/.test((e.target || {}).tagName || '')) { undo(); return; }

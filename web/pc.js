@@ -13,7 +13,7 @@
 
   window.KartaPC = true;
   window.KartaOfflineOnly = true;
-  var EXPECTED = '3.5.3';   // версия run.py, для которой написана эта страница
+  var EXPECTED = '3.5.4';   // версия run.py, для которой написана эта страница
   window.KartaPCVersion = EXPECTED;
   var OWN = /^(wf_|karta_)/;
 

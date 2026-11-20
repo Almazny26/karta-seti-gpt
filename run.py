@@ -40,7 +40,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(ROOT, "web")
 HOST = "127.0.0.1"
 PORT = 8793   # стандартный порт; другой — «--port N», он запоминается в data/remote-access.json
-VERSION = "3.5.3"
+VERSION = "3.5.4"
 
 mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("application/json", ".json")
