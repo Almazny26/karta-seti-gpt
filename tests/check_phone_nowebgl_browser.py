@@ -68,7 +68,7 @@ with tempfile.TemporaryDirectory() as folder:
             text = page.locator('#apDlgBox').inner_text()
             assert 'WebView' in text or 'Chrome' in text, text
             page.locator('#apDlg .ap-dx').click(); time.sleep(.2)
-            page.evaluate("document.getElementById('apMenuBtn').click();document.querySelector('#apMenu [data-m=theme]').click()"); time.sleep(.3)
+            page.evaluate("KartaApp.setTheme(document.body.classList.contains('dark') ? 'light' : 'dark')"); time.sleep(.3)
             for _ in range(40):
                 if painted(page) >= 2 and page.evaluate("KartaMap.info().raster"): break
                 time.sleep(.5)

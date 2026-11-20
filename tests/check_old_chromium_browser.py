@@ -46,7 +46,7 @@ with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as p
             full = page.evaluate("KartaStylePC.light.layers.length + (window.KartaCoverage ? 1 : 0)")
             assert gm['miss'] == 0 and gm['order'] == full, (gm, full)
             if SHOTS: page.screenshot(path=os.path.join(SHOTS, 'after_edge92_light.png'))
-            page.evaluate("document.getElementById('apMenuBtn').click();document.querySelector('#apMenu [data-m=theme]').click()"); time.sleep(3)
+            page.evaluate("KartaApp.setTheme(document.body.classList.contains('dark') ? 'light' : 'dark')"); time.sleep(3)
             gm = page.evaluate("(()=>{var m=KartaMap.glMap();return m.style._order.filter(i=>!m.style._layers[i]).length})()")
             assert gm == 0 and not page.evaluate('KartaMap.info().raster')
             if SHOTS: page.evaluate("document.querySelector('#apMenu') && document.body.click()"); time.sleep(.5); page.screenshot(path=os.path.join(SHOTS, 'after_edge92_dark.png'))

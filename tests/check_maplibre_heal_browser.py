@@ -54,7 +54,7 @@ with tempfile.TemporaryDirectory() as folder:
                     assert 'broken-test' in text, text
                 # смена темы — стиль целиком, без ошибок
                 for i in range(3):
-                    page.evaluate("document.getElementById('apMenuBtn').click();document.querySelector('#apMenu [data-m=theme]').click()"); time.sleep(.3)
+                    page.evaluate("KartaApp.setTheme(document.body.classList.contains('dark') ? 'light' : 'dark')"); time.sleep(.3)
                 time.sleep(1.5)
                 gm = page.evaluate("(()=>{var m=KartaMap.glMap();return m.style._order.filter(i=>!m.style._layers[i]).length})()")
                 assert gm == 0

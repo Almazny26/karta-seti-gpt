@@ -1,22 +1,14 @@
 /* Карта сети — подложка карты.
  *
- * Подключается после кода приложения. У приложения товарища без интернета видна только вшитая
- * офлайн-карта (Крым, Херсон, Запорожье, Ставрополье, масштаб 7–11). Здесь:
- *   - «Схема» — подробная карта OpenStreetMap из интернета, масштаб от 3 до 19, вся Земля;
- *     под ней вшитая офлайн-карта: без связи видно хотя бы её (а на телефоне и на компьютере —
- *     ещё и всё, что уже открывали с интернетом: оболочка и программа хранят плитки);
- *   - «Спутник», «Гибрид» — как у приложения, до масштаба 19;
- *   - выбранная подложка запоминается (karta_map);
- *   - при первом запуске новой версии включается «Онлайн» (заказчик: «пусть карта прогружается
- *     из сети»); выключить можно той же галочкой;
- *   - подписи источников на карте нет (заказчик убрал), источники перечислены в настройках
- *     (KartaMap.credits);
- *   - офлайн-карта районов (3.2): файлы PMTiles (векторные плитки OpenStreetMap, Protomaps, 0–15)
- *     рисует MapLibre GL через видеокарту — слой L.maplibreGL под остальными подложками. Плитки и
- *     шрифты подписей: на телефоне — прямо из оболочки (KartaFiles.mapTile / asset, свой
- *     «протокол» karta://, без сети), на компьютере — /omap/z/x/y.mvt и /vendor/fonts/.
- *     Внутри района «Схема» рисуется из файла сразу, интернет для неё не нужен; за границей
- *     района — OpenStreetMap из интернета (если включён) или вшитая карта 7–11.
+ *   - офлайн-схема левого берега (PMTiles, векторные плитки OpenStreetMap и Protomaps, масштаб 0–15)
+ *     рисуется MapLibre GL через видеокарту, слоем под остальными. Плитки и шрифты подписей на
+ *     телефоне идут прямо из оболочки (tileAsync, «протокол» karta://, без сети), на компьютере —
+ *     /omap/z/x/y.mvt и /vendor/fonts/. Без WebGL та же схема рисуется на холсте (protomaps-leaflet);
+ *   - телефон со связью: «Схема» внутри левобережья — вшитая, за его границей — OpenStreetMap из
+ *     интернета; «Спутник», «Гибрид» — снимки Esri и подписи Яндекса, до масштаба 19;
+ *   - телефон без связи: везде вшитая схема (3.5.3: растровая карта 7–11 убрана), вне её — подсказка;
+ *   - компьютер: только офлайн-схема, в интернет страница не ходит;
+ *   - выбранная подложка запоминается (karta_map); источники перечислены в настройках (KartaMap.credits).
  */
 (function () {
   'use strict';
@@ -30,11 +22,7 @@
 
   map.setMinZoom(3);
   map.setMaxZoom(19);
-  offlineTiles.options.maxZoom = 19;          // выше 11 — увеличенные плитки, лучше, чем пусто
-  offlineTiles.options.maxNativeZoom = 11;
-  offlineTiles.setZIndex(0);
-
-  offlineTiles.options.attribution = '&copy; участники OpenStreetMap';   // одна подпись вместо двух
+  if (map.hasLayer(offlineTiles)) map.removeLayer(offlineTiles);   // старая растровая карта 7–11 убрана в 3.5.3
   var osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     minZoom: 3, maxZoom: 19, maxNativeZoom: 19, zIndex: 1, errorTileUrl: BLANK,
     attribution: '&copy; участники OpenStreetMap'
@@ -79,7 +67,6 @@
       var k = 1 << up, x = c.x >> up, y = c.y >> up, ts = this.getTileSize().x, part = ts / k;
       var ox = (c.x - x * k) * part, oy = (c.y - y * k) * part;
       var url = L.Util.template(this._url, L.extend({ s: this._getSubdomain({ x: x, y: y }), x: x, y: y, z: z, r: '' }, this.options));
-      if (window.__kartaTileUrl) url = window.__kartaTileUrl(url, x, y);
       if (tile._kbase == null) tile._kbase = tile.style.transform || '';
       tile.style.transformOrigin = '0 0';
       tile.style.transform = tile._kbase + ' translate(' + (-ox * k) + 'px,' + (-oy * k) + 'px) scale(' + k + ')';
@@ -88,7 +75,7 @@
     };
   }
   [osm, sat, hybSat].forEach(fallback);
-  offlineTiles.setZIndex(0); osm.setZIndex(1); sat.setZIndex(3); hybSat.setZIndex(3); hybNames.setZIndex(4);
+  osm.setZIndex(1); sat.setZIndex(3); hybSat.setZIndex(3); hybNames.setZIndex(4);
 
   // ---------------------------------------------------------------- поворот двумя пальцами — не сразу
 
@@ -539,9 +526,13 @@
     return polys.some(function (poly) { return ring(poly[0]) && !poly.slice(1).some(ring); });
   }
   function showCoverageNotice() {
-    if (!window.KartaPC || !infoLoaded) return;
+    // телефон — только без связи (со связью вне левобережья видна схема из интернета)
+    var phoneOff = !window.KartaPC && !netUp;
+    if ((!window.KartaPC && !phoneOff) || !infoLoaded) { if (coverageNotice) coverageNotice.hidden = true; return; }
     if (!coverageNotice) {
       coverageNotice = document.createElement('button'); coverageNotice.type = 'button'; coverageNotice.id = 'mapCoverageNotice';
+      if (!window.KartaPC) coverageNotice.style.cssText = 'position:absolute;left:50%;top:calc(env(safe-area-inset-top,0px) + 62px);transform:translateX(-50%);z-index:1000;max-width:calc(100% - 24px);' +
+        'border:0;border-radius:12px;padding:9px 14px;background:var(--panel,#fff);color:var(--text,#1c1c1e);font:600 13px/1.35 var(--font,system-ui);box-shadow:0 2px 10px rgba(0,0,0,.2);text-align:center';
       map.getContainer().appendChild(coverageNotice);
       L.DomEvent.disableClickPropagation(coverageNotice); L.DomEvent.disableScrollPropagation(coverageNotice);
       coverageNotice.onclick = function () {
@@ -554,7 +545,8 @@
     coverageNotice.hidden = (drawnMap && !outside) || (!gl && hasVec() && !webgl());   // без WebGL — своё объяснение сверху
     coverageNotice.disabled = !drawnMap;
     coverageNotice.textContent = !hasVec() ? 'Файл схемы не найден. Перенесите папку map вместе с программой.' : !gl ?
-      'Карта не отрисовалась. Проверьте аппаратное ускорение браузера.' : 'Вне загруженной области · Показать схему';
+      'Карта не отрисовалась. Проверьте аппаратное ускорение браузера.' :
+      phoneOff ? 'Нет связи, здесь схемы нет · Показать схему' : 'Вне загруженной области · Показать схему';
   }
   /* какие слои должны быть на карте сейчас */
   function sync() {
@@ -563,9 +555,8 @@
     // интернета. «Спутник» и «Гибрид»: под ними та же схема, а поверх —
     // подробные снимки из интернета и те, что уже просматривались.
     restyle();
-    showGl(!!(gl || raster) && (offlineOnly || (sch ? cov && schema !== 'online' : true)));
-    // вшитая карта 7–11 и схема из интернета — там, где районов офлайн-карты нет (или так выбрано)
-    put(offlineTiles, !window.KartaPC && sch && !cov);
+    // 3.5.3: растровой карты 7–11 нет — без связи вшитая схема видна везде (за её границей — фон и маска)
+    showGl(!!(gl || raster) && (offlineOnly || (sch ? !netUp || (cov && schema !== 'online') : true)));
     put(osm, !offlineOnly && net, true);
     put(sat, !offlineOnly && netUp && cur === 'sat', true);
     put(hybrid, !offlineOnly && netUp && cur === 'hyb', true);

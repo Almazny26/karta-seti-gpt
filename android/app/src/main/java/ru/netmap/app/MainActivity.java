@@ -57,8 +57,8 @@ import java.util.concurrent.TimeUnit;
  * Оболочка приложения «Карта сети» (основа — приложение товарища «WiFi Френель» 1.24).
  *
  * Поведение перенесено из его оболочки без изменений:
- *   - страница web/index.html открывается из assets; плитки карты и Leaflet отдаются из assets
- *     по адресу https://local.tiles/...;
+ *   - страница web/index.html открывается из assets; Leaflet отдаётся из assets по адресу
+ *     https://local.tiles/leaflet/... (растровая карта 7–11 убрана в 3.5.3: её заменила вшитая схема);
  *   - без галочки «Онлайн» приложение не выходит в сеть (setBlockNetworkLoads), все внешние запросы
  *     получают пустой ответ;
  *   - мост AndroidBridge: fetchElevations (рельеф из assets/dem/dem.bin, при «Онлайн» — open-meteo),
@@ -236,16 +236,17 @@ public class MainActivity extends Activity {
                 if (path == null) {
                     return null;
                 }
-                int t = path.indexOf("tiles/");
                 int l = path.indexOf("leaflet/");
-                String asset = t >= 0 ? path.substring(t) : (l >= 0 ? path.substring(l) : null);
+                String asset = l >= 0 ? path.substring(l) : null;
                 if (asset == null || asset.contains("..")) {
                     return super.shouldInterceptRequest(view, request);
                 }
                 try {
                     InputStream in = getAssets().open(asset);
-                    String mime = "image/png";
-                    if (asset.endsWith(".css")) {
+                    String mime = "application/octet-stream";
+                    if (asset.endsWith(".png")) {
+                        mime = "image/png";
+                    } else if (asset.endsWith(".css")) {
                         mime = "text/css";
                     } else if (asset.endsWith(".js")) {
                         mime = "application/javascript";

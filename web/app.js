@@ -47,6 +47,7 @@
   };
   var STATES = { 'работает': '#2e7d32', 'авария': '#c62828', 'работы': '#ef6c00', 'план': '#78909c' };
   var PT_KINDS = ['опора', 'колодец', 'муфта', 'кросс', 'запас', 'точка'];
+  var PT_RANK = { 'кросс': 1, 'муфта': 2, 'запас': 3, 'колодец': 4, 'опора': 5, 'точка': 6 };   // кто остаётся издали
   var PT_COLOR = { 'опора': '#5d4037', 'колодец': '#455a64', 'муфта': '#ef6c00', 'кросс': '#2e7d32', 'запас': '#00838f', 'точка': '#78909c', 'узел': '#1565c0' };
   var LAY = {
     air: { name: 'по опорам', color: '#e8590c', dash: null },
@@ -425,7 +426,9 @@
     '.ap .joint-note{display:block;margin:8px 0;white-space:pre-wrap;overflow-wrap:anywhere}.ap .joint-dist{white-space:normal;overflow-wrap:anywhere}',
     '.ap .route-option input[type=radio]{width:auto}',
     '.ap .chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}',
-    '.ap .chips.fib .chip{min-width:44px;min-height:40px;justify-content:center;padding:6px 10px}',
+    '.ap .chips.fib{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;margin:0;flex:1;min-width:0}',
+    '.ap .chips.fib .chip{min-width:0;min-height:40px;justify-content:center;padding:4px 2px;font-variant-numeric:tabular-nums}',
+    '.ap .lrow.fibrow{align-items:flex-start}.ap .lrow.fibrow>.muted{line-height:40px}',
     '.ap .chips.tight{margin:6px 0 0}.ap .chips.scroll{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-right:16px}.ap .chips.scroll::-webkit-scrollbar{display:none}',
     '.ap .lrow{display:flex;align-items:center;gap:10px;margin-top:6px}.ap .lrow>.muted{flex:0 0 58px}.ap .lrow .chips{margin:0}',
     '.ap .row.tool{flex-wrap:nowrap}.ap .row.tool>button{flex:0 0 auto}',
@@ -585,7 +588,6 @@
     file: ic('<path d="M7 4v13M3 13l4 4 4-4M17 20V7M13 11l4-4 4 4"/>'),
     list: ic('<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>', 2.2),
     web: ic('<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.6 2.5 14.4 0 17M12 3.5c-2.5 2.6-2.5 14.4 0 17"/>'),
-    moon: ic('<path d="M19.5 14.5A8 8 0 0 1 9.5 4.5a8 8 0 1 0 10 10z"/>'),
     user: ic('<circle cx="12" cy="8" r="4"/><path d="M4 20c1.5-4 4.5-5.5 8-5.5s6.5 1.5 8 5.5"/>'),
     node: ic('<circle cx="12" cy="12" r="6"/>'),
     fiber: ic('<path d="M3 18l6-6 4 4 8-9"/><circle cx="3" cy="18" r="1.5" fill="currentColor"/><circle cx="21" cy="7" r="1.5" fill="currentColor"/>'),
@@ -935,7 +937,8 @@
   /* с какого масштаба видна точка линии: муфты и кроссы — раньше опор и колодцев */
   function ptShown(kind, z) {
     var base = S.linePts === 'always' ? 12 : S.linePts === 'never' ? 99 : 14;
-    return z >= (kind === 'муфта' || kind === 'кросс' || kind === 'запас' ? base - 2 : base);
+    // муфты, кроссы и запасы видны раньше прочих точек; «по масштабу» — с 13-го (3.5.3: на 12-м их тысячи)
+    return z >= (kind === 'муфта' || kind === 'кросс' || kind === 'запас' ? (S.linePts === 'always' ? base - 2 : base - 1) : base);
   }
 
   // --------------------------------------------------------------- что видно на экране (после движения)
@@ -945,11 +948,28 @@
   function drawPoints() {
     var keep = {};
     var z = map.getZoom(), b = view2(), lblZ = S.ptLbl === 'always' ? 14 : S.ptLbl === 'never' ? 99 : 16, n = 0, f = zf(z);
+    /* Издали (масштаб 14 и мельче) из значков, легших в одну клетку экрана, рисуется один — самый
+     * важный (кросс, муфта, запас…). Иначе на большой сети на 12-м масштабе ~5 000 муфт рисовались
+     * поверх друг друга, и каждый сдвиг или смена масштаба замирали на секунду. */
+    var cand = [], cell = z < 15 ? Math.max(12, Math.round(22 * S.ptSize * f)) : 0, taken = {};
     alive().forEach(function (o) {
       if (o.type !== 'fiber') return;
       if (sel && sel.type === 'line' && sel.id === o.id && mode === 'edit' && !tool) return;      // у выделенной линии — ручки
       ptsOf(o).forEach(function (p, i) {
-        if (p.nid || n > 12000 || !ptShown(p.kind, z) || !b.contains([p.lat, p.lng])) return;
+        if (p.nid || !ptShown(p.kind, z) || !b.contains([p.lat, p.lng])) return;
+        cand.push([o, p, i, PT_RANK[p.kind] || 9]);
+      });
+    });
+    if (cell) cand.sort(function (a, c) { return a[3] - c[3]; });
+    cand.forEach(function (c) {
+      var o = c[0], p = c[1], i = c[2];
+      if (n > 12000) return;
+      if (cell) {
+        var px = map.project([p.lat, p.lng], z), ck = Math.floor(px.x / cell) + ':' + Math.floor(px.y / cell);
+        if (taken[ck]) return;
+        taken[ck] = 1;
+      }
+      (function () {
         n++;
         var key = o.id + ':' + i, st = PT_SHAPE[p.kind] || PT_SHAPE['точка'], r = Math.max(3, (PT_PX[p.kind] || 12) / 2.6 * S.ptSize * f);
         var sig = p.lat + ',' + p.lng + ',' + p.kind + ',' + r + ',' + (z >= lblZ ? p.name || '' : '');
@@ -960,7 +980,7 @@
         if (p.name && z >= lblZ) l = L.marker([p.lat, p.lng], { interactive: false, keyboard: false, icon: L.divIcon({ className: '', html: '<div class="ap-plbl">' + esc(p.name) + '</div>', iconSize: [0, 0], iconAnchor: [0, -r] }) }).addTo(ptsLayer);
         pointMarkers[key] = { m: m, l: l, sig: sig };
         keep[key] = true;
-      });
+      })();
     });
     Object.keys(pointMarkers).forEach(function (key) {
       if (!keep[key]) { var o = pointMarkers[key]; ptsLayer.removeLayer(o.m); if (o.l) ptsLayer.removeLayer(o.l); delete pointMarkers[key]; }
@@ -976,6 +996,20 @@
       if (isSel || b.contains([o.f.lat, o.f.lng])) vis.push(o);
     });
     var dom = vis.length <= (pc ? 600 : 300), f = zf(z);
+    if (!dom && z < 13) {
+      // издали узлы, легшие точно друг на друга, рисуются одним значком (важные — первыми)
+      var BIGK = { 'опорный узел': 1, 'базовая станция': 1, 'коммутатор': 1 }, taken = {}, cell = Math.max(10, Math.round((z < 11 ? 18 : 14) * S.nodeSize * f));
+      vis.sort(function (a, c) {
+        var ra = sel && sel.id === a.id ? 0 : BIGK[a.f.kind] ? 1 : 2, rc = sel && sel.id === c.id ? 0 : BIGK[c.f.kind] ? 1 : 2;
+        return ra - rc;
+      });
+      vis = vis.filter(function (o) {
+        if (sel && sel.type === 'node' && sel.id === o.id) return true;
+        var px = map.project([o.f.lat, o.f.lng], z), ck = Math.floor(px.x / cell) + ':' + Math.floor(px.y / cell);
+        if (taken[ck]) return false;
+        taken[ck] = 1; return true;
+      });
+    }
     vis.forEach(function (o) {
       var isSel = sel && sel.type === 'node' && sel.id === o.id, asDom = dom || isSel;
       var sig = [o.t, o.f.lat, o.f.lng, o.f.name, o.f.kind, o.f.state, asDom ? 'd' : 'c', isSel ? 's' : '', mode, tool ? 't' : '', S.nodeSize, f, gen].join('|');
@@ -1052,20 +1086,40 @@
   var FAR_Z = 12, farNow = null;
   function farZoom() { return map.getZoom() <= FAR_Z; }
   map.on('zoomend', function () { if (farNow !== null && farNow !== farZoom()) refresh(); });
+  /* Вблизи у линии белая подложка и участки — слоёв в 5–6 раз больше. При переходе на 13-й масштаб
+   * большой сети (тысячи линий) подробно перерисовываются только линии на экране; остальные — когда
+   * до них дойдёт карта (после сдвига). Иначе первый кадр 13-го масштаба замирал на секунду. */
+  var LAZY_MIN = 800, lazyLeft = 0;
+  map.on('moveend', function () { if (lazyLeft) refresh(); });
+  function lineOnScreen(o, b) {
+    var pts = ptsOf(o);
+    if (!pts.length) return false;
+    var s0 = pts[0].lat, n0 = s0, w0 = pts[0].lng, e0 = w0;
+    for (var i = 1; i < pts.length; i++) { var p = pts[i]; if (p.lat < s0) s0 = p.lat; else if (p.lat > n0) n0 = p.lat; if (p.lng < w0) w0 = p.lng; else if (p.lng > e0) e0 = p.lng; }
+    return b.intersects(L.latLngBounds([s0, w0], [n0, e0]));
+  }
   function refresh() {
     index = null;
-    var z = map.getZoom(), seen = {}, redrew = false, far = farNow = farZoom();
+    var z = map.getZoom(), seen = {}, redrew = false, far = farNow = farZoom(), todo = [];
     alive().forEach(function (o) {
       if (o.type === 'node') return;
       seen[o.id] = true;
       var isSel = sel && sel.type === 'line' && sel.id === o.id, editSel = isSel && mode === 'edit' && !tool;
       var flags = [o.t, isSel ? 's' : '', editSel ? 'e' : '', pc && mode === 'view' ? 'v' : '', S.lineW, gen, far && !isSel ? 'f' : ''].join('|'), d = drawn[o.id];
       if (d && d.ref === o && d.flags === flags) return;
-      if (d) d.layers.forEach(function (l) { layer.removeLayer(l); });
-      drawn[o.id] = { ref: o, flags: flags, layers: drawLine(o, z, far && !isSel) };
-      redrew = true;
+      todo.push([o, flags, isSel]);
     });
     Object.keys(drawn).forEach(function (id) { if (!seen[id]) { drawn[id].layers.forEach(function (l) { layer.removeLayer(l); }); delete drawn[id]; } });
+    // только вид линии издали/вблизи сменился у многих сразу — откладываем те, что не на экране
+    var lazy = !far && todo.length >= LAZY_MIN, b = lazy ? map.getBounds().pad(0.5) : null;
+    lazyLeft = 0;
+    todo.forEach(function (t) {
+      var o = t[0], d = drawn[o.id];
+      if (lazy && d && d.ref === o && !t[2] && !lineOnScreen(o, b)) { lazyLeft++; return; }
+      if (d) d.layers.forEach(function (l) { layer.removeLayer(l); });
+      drawn[o.id] = { ref: o, flags: t[1], layers: drawLine(o, z, far && !t[2]) };
+      redrew = true;
+    });
     decor();
     if (redrew) {   // новые линии легли на холст поверх значков — значки снова наверх
       Object.keys(pointMarkers).forEach(function (k) { pointMarkers[k].m.bringToFront(); });
@@ -2009,9 +2063,10 @@
     html = '<div class="muted">Точек: <b>' + t.pts.length + '</b> · ' + len(lenOf(t.pts)) +
       (t.pts.length ? '' : ' · двигайте карту — точка встаёт в перекрестие, или нажмите на место') + '</div>';
     if (t.type === 'fiber') {
-      html += '<div class="chips tight scroll fib" title="Число жил кабеля"><span class="muted">Жил:</span>' + FIBERS.map(function (k) {
+      // число жил — ровная сетка 5 × 2 (3.5.3), а не прокручиваемая строка
+      html += '<div class="lrow fibrow" title="Число жил кабеля"><span class="muted">Жил</span><div class="chips fib">' + FIBERS.map(function (k) {
           return '<button type="button" class="chip' + (String(t.fibers) === k ? ' on' : '') + '" data-fib="' + k + '">' + k + '</button>';
-        }).join('') + '</div>';
+        }).join('') + '</div></div>';
       html += layChips(t.nextLay, 'next') +
         '<div class="chips tight scroll">' + PT_KINDS.map(function (k) {
           return '<button type="button" class="chip' + (t.nextKind === k ? ' on' : '') + '" data-k="' + k + '">' + ptSvg(k, 16) + k + '</button>';
@@ -2159,15 +2214,12 @@
 
   // ================================================================== настройки (меню «⋮»)
 
-  function sw(on) { return '<span class="sw' + (on ? ' on' : '') + '"></span>'; }
   function renderMenu() {
-    var dark = document.body.classList.contains('dark');
     menu.innerHTML =
       '<button type="button" class="mi" data-m="file">' + I.file + 'Обмен данными (файл)</button>' +
       '<button type="button" class="mi" data-m="journal">' + I.list + 'Журнал изменений</button>' +
       '<button type="button" class="mi" data-m="legend">' + I.node + 'Обозначения</button>' +
       '<button type="button" class="mi" data-m="help">' + I.help + 'Инструкция</button>' +
-      '<hr><button type="button" class="mi" data-m="theme">' + I.moon + 'Тёмная тема' + sw(dark) + '</button>' +
       '<hr><button type="button" class="mi" data-m="set">' + I.gear + 'Настройки</button>';
   }
   function closeMenu() { menu.classList.remove('show'); }
@@ -2183,7 +2235,6 @@
     var m = b.getAttribute('data-m');
     if (m === 'file') { closeMenu(); showExchange(); }
     else if (m === 'journal') { closeMenu(); showJournal(); }
-    else if (m === 'theme') { setS('theme', document.body.classList.contains('dark') ? 'light' : 'dark'); renderMenu(); menu.classList.add('show'); }
     else if (m === 'legend') { closeMenu(); showLegend(); }
     else if (m === 'help') { closeMenu(); showHelp(); }
     else if (m === 'set') { closeMenu(); showSettings(); }
@@ -2533,6 +2584,7 @@
     },
     mapChanged: function () { gen++; refresh(); },
     webglHelp: showWebglHelp,
+    setTheme: function (t) { setS('theme', t); },   // для проверок; в меню тема — в «Настройках»
     mapCheck: showMapCheck,
     addCross: function () { if ($('apAddPt')) $('apAddPt').click(); }, state: function () { return { mode: mode, tool: tool, sel: sel, view: view }; } };
 
@@ -2664,7 +2716,7 @@
       '<button type="button" class="b t" data-a="who">Изменить</button></div>' +
       '<div class="srow"><span>Схема не видна или с ошибками<small>WebGL, плитки, ошибки карты; упрощённая схема</small></span><button type="button" class="b t" data-a="mapcheck">Проверка карты</button></div>' +
       '<div class="row"><button type="button" class="b d" data-a="reset">Сбросить настройки</button><button type="button" class="b" id="apNo">Готово</button></div>' +
-      '<p class="muted">Карта сети ' + (window.KartaPCVersion || '3.5.2') + '. Настройки хранятся на этом устройстве и в файл обмена не попадают.<br>' + esc((window.KartaMap && window.KartaMap.credits) || '') + '</p>';
+      '<p class="muted">Карта сети ' + (window.KartaPCVersion || '3.5.3') + '. Настройки хранятся на этом устройстве и в файл обмена не попадают.<br>' + esc((window.KartaMap && window.KartaMap.credits) || '') + '</p>';
     openDlg(html);
     dlgBox.setAttribute('data-set', '1');
     dlgBox.scrollTop = top;
