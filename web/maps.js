@@ -164,29 +164,29 @@
     for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
     return u.buffer;
   }
-  // телефон: плитки и шрифты берутся прямо из оболочки, без сети
-  if (bridge && window.maplibregl) {
-    /* Ответ оболочки — в фоне (tileAsync → window.__kartaTile): пока Java читает плитку, страница
-     * и жесты не ждут. Base64 раскладывается в байты тоже без остановки страницы (fetch data:). */
-    var pend = {}, seq = 0;
-    window.__kartaTile = function (id, s) { var f = pend[id]; if (f) { delete pend[id]; f(s); } };
-    function ask(kind, z, x, y, path, ac) {
-      return new Promise(function (done) {
-        var id = ++seq, sig = ac && ac.signal;
-        pend[id] = done;
-        if (sig) sig.addEventListener('abort', function () {
-          if (!pend[id]) return;
-          delete pend[id];
-          try { kf.tileCancel(id); } catch (e) { /* нет */ }
-          done('');
-        });
-        try { kf.tileAsync(id, kind, z, x, y, path || ''); } catch (e) { delete pend[id]; done(''); }
+  // телефон: плитки и шрифты из оболочки в фоне (и для MapLibre, и для упрощённой схемы без WebGL)
+  /* Ответ оболочки — в фоне (tileAsync → window.__kartaTile): пока Java читает плитку, страница
+   * и жесты не ждут. Base64 раскладывается в байты тоже без остановки страницы (fetch data:). */
+  var pend = {}, seq = 0;
+  if (bridge) window.__kartaTile = function (id, s) { var f = pend[id]; if (f) { delete pend[id]; f(s); } };
+  function ask(kind, z, x, y, path, ac) {
+    return new Promise(function (done) {
+      var id = ++seq, sig = ac && ac.signal;
+      pend[id] = done;
+      if (sig) sig.addEventListener('abort', function () {
+        if (!pend[id]) return;
+        delete pend[id];
+        try { kf.tileCancel(id); } catch (e) { /* нет */ }
+        done('');
       });
-    }
-    function bytes(s) {
-      if (!s) return Promise.resolve(new ArrayBuffer(0));
-      return fetch('data:application/octet-stream;base64,' + s).then(function (r) { return r.arrayBuffer(); }, function () { return b64(s); });
-    }
+      try { kf.tileAsync(id, kind, z, x, y, path || ''); } catch (e) { delete pend[id]; done(''); }
+    });
+  }
+  function bytes(s) {
+    if (!s) return Promise.resolve(new ArrayBuffer(0));
+    return fetch('data:application/octet-stream;base64,' + s).then(function (r) { return r.arrayBuffer(); }, function () { return b64(s); });
+  }
+  if (bridge && window.maplibregl) {
     maplibregl.addProtocol('karta', function (params, ac) {
       var u = params.url, m, got;
       if (kf.tileAsync) {
@@ -224,6 +224,7 @@
       s.sources.coverage = {type:'geojson',data:{type:'Feature',properties:{},geometry:KartaCoverage.mask},tolerance:0};
       s.layers.push({id:'coverage-mask',type:'fill',source:'coverage',paint:{'fill-color':theme === 'dark' ? '#171a1f' : '#e4e2dd','fill-antialias':false}});
     }
+    lastLayers = s.layers.slice();
     return s;
   }
   /* Схема левобережья с подробными слоями (та же, что на ПК): на ПК и в приложении со вшитой картой */
@@ -318,7 +319,10 @@
   }
   function makeRaster() {
     var dark = document.body.classList.contains('dark'), list = files('map');
-    var src = bridge ? { getZxy: function (z, x, y) {
+    var src = bridge ? { getZxy: function (z, x, y, signal) {
+      // как у MapLibre: плитка приходит из оболочки в фоне (tileAsync), страница не ждёт Java
+      if (kf.tileAsync) return ask('t', z, x, y, '', signal ? { signal: signal } : null)
+        .then(function (t) { return t ? bytes(t).then(function (d) { return { data: d }; }) : undefined; });
       var t = '';
       try { t = kf.mapTile(z, x, y); } catch (e) { t = ''; }
       return Promise.resolve(t ? { data: b64(t) } : undefined);
@@ -381,12 +385,28 @@
    * схема пустая), список слоёв расходится с созданными слоями. Тогда: убрать сломанные из порядка
    * (кадры перестают падать), запомнить первый несозданный слой, пересоздать карту без него; после
    * шести попыток — упрощённая схема на холсте. */
-  var skipLayers = {}, heals = 0, healT = 0;
+  var skipLayers = {}, heals = 0, healT = 0, lastLayers = [];
   function broken(m) {
     var st = m && m.style;
     if (!st || !st._order || !st._layers) return null;
     var miss = st._order.filter(function (id) { return !st._layers[id]; });
     return miss.length ? miss : null;
+  }
+  /* Какие из несозданных слоёв сломаны на самом деле: MapLibre бросает создание на первой ошибке,
+   * остальные слои просто не дошли до очереди. Каждый пробуется отдельно; пропускаются только те,
+   * что и поодиночке не создаются. Упрощённая схема — только если не создаётся ни один слой. */
+  function sortOut(m, miss) {
+    var bad = [], why = '';
+    miss.forEach(function (id) {
+      var def = null, before, i;
+      for (i = 0; i < lastLayers.length; i++) if (lastLayers[i].id === id) { def = lastLayers[i]; break; }
+      if (!def) { bad.push(id); return; }
+      for (i++; i < lastLayers.length && !before; i++) if (m.getLayer(lastLayers[i].id)) before = lastLayers[i].id;   // на своё место
+      try { if (!m.getLayer(id)) m.addLayer(JSON.parse(JSON.stringify(def)), before); }
+      catch (e) { if (!why) why = (e && e.message) || String(e); }
+      if (!m.getLayer(id)) bad.push(id);
+    });
+    return { bad: bad, why: why };
   }
   function heal(m, tries) {
     clearTimeout(healT);
@@ -395,10 +415,15 @@
     if (miss) {
       var st = m.style;
       st._order = st._order.filter(function (id) { return !!st._layers[id]; });
-      if (stat.errors.length < 8) stat.errors.push('слои не создались: ' + miss.slice(0, 5).join(', ') + (miss.length > 5 ? ' и ещё ' + (miss.length - 5) : ''));
-      skipLayers[miss[0]] = true;
+      var r = sortOut(m, miss);
+      if (stat.errors.length < 8) stat.errors.push('не создались слои: ' + (r.bad.slice(0, 6).join(', ') || 'нет') +
+        (r.bad.length > 6 ? ' и ещё ' + (r.bad.length - 6) : '') + ' из ' + lastLayers.length + (r.why ? ' — ' + r.why : ''));
+      r.bad.forEach(function (id) { skipLayers[id] = true; });
       if (gl !== m) return;
-      if (++heals > 6) { glLost(); return; }
+      if (lastLayers.length && r.bad.length >= lastLayers.length) { glLost(); return; }   // не создаётся ничего — холст
+      if (!r.bad.length) { try { m.triggerRepaint(); } catch (e) { /* нет */ } return; }   // все слои досозданы на месте
+      if (++heals > 3) { glLost(); return; }
+      // карта пересоздаётся целиком (у оборванной загрузки стиля нет освещения и события style.load)
       try { m.remove(); } catch (e) { /* уже убрана */ }
       gl = null;
       try { gl = makeGl(); watchGl(gl); heal(gl); } catch (e) { gl = null; glOk = false; startRaster(); }
@@ -440,8 +465,12 @@
       glNote.style.cssText = 'position:absolute;left:50%;top:calc(env(safe-area-inset-top,0px) + 62px);transform:translateX(-50%);z-index:1001;max-width:calc(100% - 24px);' +
         'border:0;border-radius:12px;padding:9px 14px;background:#fff4e5;color:#7a4100;font:600 13px/1.35 var(--font,system-ui);box-shadow:0 2px 10px rgba(0,0,0,.2);cursor:pointer;text-align:center';
       map.getContainer().appendChild(glNote);
+      var st = document.createElement('style'); st.textContent = 'body.dark #mapGlNotice{background:#3d2c12!important;color:#ffd08a!important}'; document.head.appendChild(st);
       L.DomEvent.disableClickPropagation(glNote); L.DomEvent.disableScrollPropagation(glNote);
-      glNote.onclick = function () { if (window.KartaApp && KartaApp.mapCheck) KartaApp.mapCheck(); };
+      glNote.onclick = function () {   // «Как включить» — сразу объяснение; «Проверка карты» — сведения
+        var A = window.KartaApp; if (!A) return;
+        if (!webgl() && !gl && A.webglHelp && !/Проверка/.test(glNote.textContent)) A.webglHelp(); else if (A.mapCheck) A.mapCheck();
+      };
     }
     glNote.hidden = false;
     var off = false; try { off = localStorage.getItem(GLKEY) === 'off'; } catch (e) { off = false; }

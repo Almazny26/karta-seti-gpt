@@ -2,10 +2,10 @@ plugins {
     id 'com.android.application'
 }
 
-// Номер версии передаёт сборка GitHub Actions: -Pvc=<351000 + номер сборки> -Pvn=3.5.1.<номер сборки>
+// Номер версии передаёт сборка GitHub Actions: -Pvc=<352000 + номер сборки> -Pvn=3.5.2.<номер сборки>
 // (код больше прежних 2.0.N, поэтому 3.5 ставится поверх них)
-def vc = (project.findProperty('vc') ?: '351000') as int
-def vn = (project.findProperty('vn') ?: '3.5.1') as String
+def vc = (project.findProperty('vc') ?: '352000') as int
+def vn = (project.findProperty('vn') ?: '3.5.2') as String
 
 // Офлайн-схема (левый берег, ~160 МБ) вшивается в APK. В git её нет (ограничение GitHub 100 МБ):
 // сборка берёт файл -PmapFile=… или ../../map/karta-offline.pmtiles (так же лежит у ПК-версии),

@@ -496,9 +496,12 @@
     '#apMenu hr{border:0;border-top:1px solid var(--line);margin:4px 8px}',
     // всплывающее сообщение
     '#apToast{position:fixed;left:calc(50% + var(--panel-w,0px) / 2);bottom:calc(var(--sheet-h,0px) + 18px);transform:translateX(-50%);text-align:center;z-index:3000;background:#3a3a3c;color:#fff;border-radius:14px;padding:10px 16px;' +
-      'font:14px var(--font);max-width:calc(100vw - 32px);box-shadow:0 6px 20px rgba(0,0,0,.3);opacity:0;pointer-events:none;transition:opacity .2s}',
+      'font:14px var(--font);width:max-content;max-width:calc(100vw - var(--panel-w,0px) - 32px);box-sizing:border-box;box-shadow:0 6px 20px rgba(0,0,0,.3);opacity:0;pointer-events:none;transition:opacity .2s}',
     '#apToast.show{opacity:1}',
-    'body.ap-dlgon #apToast{bottom:auto;top:calc(env(safe-area-inset-top,0px) + 64px)}',
+    // окно открыто — сообщение над ним, в затемнённой полосе сверху, а не на заголовке окна
+    'body.ap-dlgon #apToast{bottom:auto;top:calc(env(safe-area-inset-top,0px) + 10px)}',
+    // телефон боком: окно почти во всю высоту — сообщение в узкой полосе над ним, а не на заголовке
+    '@media (orientation:landscape) and (max-height:34em){body.ap-dlgon #apToast{top:calc(env(safe-area-inset-top,0px) + 6px);padding:7px 14px;max-width:min(560px,80vw);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#apDlg{padding-top:46px;box-sizing:border-box}#apDlgBox{max-height:calc(100vh - 52px)}}',
     // перекрестие
     '#apCross{position:fixed;z-index:1040;width:0;height:0;pointer-events:none;display:none}',
     '#apCross.show{display:block}',
@@ -782,7 +785,7 @@
   // ================================================================== диалоги
 
   var dlgLock = false;      // окно нельзя закрыть, не ответив (имя при первом запуске)
-  function openDlg(html) { document.body.classList.add('ap-dlgon'); dlgBox.removeAttribute('data-set'); dlgLock = false; dlg.classList.remove('lock'); dlgBox.style.transform = ''; dlgBox.scrollTop = 0;
+  function openDlg(html) { document.body.classList.add('ap-dlgon'); clearTimeout(toastT); toastEl.classList.remove('show'); dlgBox.removeAttribute('data-set'); dlgLock = false; dlg.classList.remove('lock'); dlgBox.style.transform = ''; dlgBox.scrollTop = 0;
     dlgBox.innerHTML = '<div class="ap-dhead"><div class="ap-grip"></div><button type="button" class="ap-x ap-dx" title="Закрыть" aria-label="Закрыть">' + XSVG + '</button></div>' + html;
     var head = dlgBox.firstChild, h3 = head.nextElementSibling;
     if (h3 && h3.tagName === 'H3') head.insertBefore(h3, head.lastChild);       // заголовок — в шапку, рядом с крестиком
@@ -2661,7 +2664,7 @@
       '<button type="button" class="b t" data-a="who">Изменить</button></div>' +
       '<div class="srow"><span>Схема не видна или с ошибками<small>WebGL, плитки, ошибки карты; упрощённая схема</small></span><button type="button" class="b t" data-a="mapcheck">Проверка карты</button></div>' +
       '<div class="row"><button type="button" class="b d" data-a="reset">Сбросить настройки</button><button type="button" class="b" id="apNo">Готово</button></div>' +
-      '<p class="muted">Карта сети ' + (window.KartaPCVersion || '3.5.1') + '. Настройки хранятся на этом устройстве и в файл обмена не попадают.<br>' + esc((window.KartaMap && window.KartaMap.credits) || '') + '</p>';
+      '<p class="muted">Карта сети ' + (window.KartaPCVersion || '3.5.2') + '. Настройки хранятся на этом устройстве и в файл обмена не попадают.<br>' + esc((window.KartaMap && window.KartaMap.credits) || '') + '</p>';
     openDlg(html);
     dlgBox.setAttribute('data-set', '1');
     dlgBox.scrollTop = top;

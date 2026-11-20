@@ -54,7 +54,10 @@ with tempfile.TemporaryDirectory() as folder:
                     if m == 'set':
                         small = page.evaluate('''() => [...document.querySelectorAll('#apDlgBox button')].filter(b => b.offsetParent && !b.classList.contains('sw') && Math.min(b.getBoundingClientRect().width, b.getBoundingClientRect().height) < 34).map(b => b.textContent)''')
                         assert not small, small
-                        page.evaluate("KartaApp.toast ? KartaApp.toast('проверка') : 0")
+                        page.evaluate("(t=>{t.textContent='Сохранено: изменения записаны в файл';t.classList.add('show')})(document.getElementById('apToast'))"); time.sleep(.35)
+                        t = page.locator('#apToast').bounding_box(); d = page.locator('#apDlgBox').bounding_box()
+                        assert t['y'] + t['height'] <= d['y'] + 1 or t['y'] >= d['y'] + 60, ('сообщение на заголовке окна', t, d)
+                        page.evaluate("document.getElementById('apToast').classList.remove('show')")
                     page.locator('#apDlg .ap-dx').click(); time.sleep(.15)
                 page.evaluate("KartaApp.setMode('edit'); KartaApp.startLine('fiber')"); time.sleep(.3)
                 fib = page.locator('#apSheet [data-fib]').first.bounding_box()
